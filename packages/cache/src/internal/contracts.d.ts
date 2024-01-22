@@ -30,7 +30,10 @@ export interface ReserveCacheRequest {
 }
 
 export interface ReserveCacheResponse {
-  cacheId: number
+  cacheId?: number
+  uploadId?: string
+  archiveLocation?: string
+  uploadUrls?: string[]
 }
 
 export interface InternalCacheOptions {

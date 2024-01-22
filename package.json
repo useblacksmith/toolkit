@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@types/jest": "^27.0.2",
-    "@types/node": "^16.18.1",
+    "@types/node": "^16.18.74",
     "@types/signale": "^1.4.1",
     "concurrently": "^6.1.0",
     "eslint": "^8.0.1",

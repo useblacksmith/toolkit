@@ -108,6 +108,7 @@ export async function retryTypedResponse<T>(
     // If the error object contains the statusCode property, extract it and return
     // an TypedResponse<T> so it can be processed by the retry logic.
     (error: Error) => {
+      core.debug(`Error occurred during ${name}: ${JSON.stringify(error)}`)
       if (error instanceof HttpClientError) {
         return {
           statusCode: error.statusCode,

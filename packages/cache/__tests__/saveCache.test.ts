@@ -50,7 +50,7 @@ test('save with large cache outputs should fail', async () => {
   const createTarMock = jest.spyOn(tar, 'createTar')
   const logWarningMock = jest.spyOn(core, 'warning')
 
-  const cacheSize = 11 * 1024 * 1024 * 1024 //~11GB, over the 10GB limit
+  const cacheSize = 27 * 1024 * 1024 * 1024 //~27GB, over the 25GB limit
   jest
     .spyOn(cacheUtils, 'getArchiveFileSizeInBytes')
     .mockReturnValueOnce(cacheSize)
@@ -63,7 +63,7 @@ test('save with large cache outputs should fail', async () => {
   expect(cacheId).toBe(-1)
   expect(logWarningMock).toHaveBeenCalledTimes(1)
   expect(logWarningMock).toHaveBeenCalledWith(
-    'Failed to save: Cache size of ~11264 MB (11811160064 B) is over the 10GB limit, not saving cache.'
+    'Failed to save: Cache size of ~11264 MB (11811160064 B) is over the 25GB limit, not saving cache.'
   )
 
   const archiveFolder = '/foo/bar'
@@ -137,7 +137,7 @@ test('save with large cache outputs should fail in GHES without error message', 
   const createTarMock = jest.spyOn(tar, 'createTar')
   const logWarningMock = jest.spyOn(core, 'warning')
 
-  const cacheSize = 11 * 1024 * 1024 * 1024 //~11GB, over the 10GB limit
+  const cacheSize = 27 * 1024 * 1024 * 1024 //~27GB, over the 25GB limit
   jest
     .spyOn(cacheUtils, 'getArchiveFileSizeInBytes')
     .mockReturnValueOnce(cacheSize)

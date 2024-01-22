@@ -197,7 +197,7 @@ export async function saveCache(
     if (core.isDebug()) {
       await listTar(archivePath, compressionMethod)
     }
-    const fileSizeLimit = 10 * 1024 * 1024 * 1024 // 10GB per repo limit
+    const fileSizeLimit = 25 * 1024 * 1024 * 1024 // 25GB per repo limit
     const archiveFileSize = utils.getArchiveFileSizeInBytes(archivePath)
     core.debug(`File Size: ${archiveFileSize}`)
 
@@ -206,7 +206,7 @@ export async function saveCache(
       throw new Error(
         `Cache size of ~${Math.round(
           archiveFileSize / (1024 * 1024)
-        )} MB (${archiveFileSize} B) is over the 10GB limit, not saving cache.`
+        )} MB (${archiveFileSize} B) is over the 25GB limit, not saving cache.`
       )
     }
 
@@ -237,13 +237,18 @@ export async function saveCache(
     }
 
     core.debug(`Saving Cache (ID: ${cacheId})`)
-    await cacheHttpClient.saveCache(cacheId, archivePath, options)
+    await cacheHttpClient.saveCache(
+      cacheId,
+      archivePath,
+      reserveCacheResponse.result?.uploadUrls ?? []
+    )
   } catch (error) {
     const typedError = error as Error
     if (typedError.name === ValidationError.name) {
       throw error
     } else if (typedError.name === ReserveCacheError.name) {
       core.info(`Failed to save: ${typedError.message}`)
+      core.debug(JSON.stringify(error))
     } else {
       core.warning(`Failed to save: ${typedError.message}`)
     }

@@ -40,13 +40,15 @@ import {
 const versionSalt = '1.0'
 
 function getCacheApiUrl(resource: string): string {
-  const baseUrl: string = process.env['ACTIONS_CACHE_URL'] || ''
+  const baseUrl: string =
+    process.env['BLACKSMITH_CACHE_URL'] ||
+    'https://stagingapi.blacksmith.sh/cache'
   if (!baseUrl) {
     throw new Error('Cache Service Url not found, unable to restore cache.')
   }
 
-  const url = `${baseUrl}_apis/artifactcache/${resource}`
-  core.debug(`Resource Url: ${url}`)
+  const url = `${baseUrl}/${resource}`
+  core.debug(`Blacksmith cache resource URL: ${url}; version: 3.2.22`)
   return url
 }
 
@@ -58,6 +60,8 @@ function getRequestOptions(): RequestOptions {
   const requestOptions: RequestOptions = {
     headers: {
       Accept: createAcceptHeader('application/json', '6.0-preview.1')
+      // 'X-Github-Org-Name': process.env['GITHUB_ORG_NAME'],
+      // 'X-Github-Repo-Name': process.env['GITHUB_REPO_NAME']
     }
   }
 
@@ -65,11 +69,11 @@ function getRequestOptions(): RequestOptions {
 }
 
 function createHttpClient(): HttpClient {
-  const token = process.env['ACTIONS_RUNTIME_TOKEN'] || ''
+  const token = '1|l3TWBBP8vaRKLVzXtPWTsak7JSNBvcSLKsQC3V6Rc4f7fe0d'
   const bearerCredentialHandler = new BearerCredentialHandler(token)
 
   return new HttpClient(
-    'actions/cache',
+    'useblacksmith/cache',
     [bearerCredentialHandler],
     getRequestOptions()
   )
@@ -110,7 +114,7 @@ export async function getCacheEntry(
     options?.compressionMethod,
     options?.enableCrossOsArchive
   )
-  const resource = `cache?keys=${encodeURIComponent(
+  const resource = `?keys=${encodeURIComponent(
     keys.join(',')
   )}&version=${version}`
 
@@ -252,21 +256,30 @@ async function uploadChunk(
   )
   const additionalHeaders = {
     'Content-Type': 'application/octet-stream',
-    'Content-Range': getContentRange(start, end)
+    'Content-Length': end - start + 1
+    // Host: 'blacksmith-cache.fra1.digitaloceanspaces.com'
   }
 
   const uploadChunkResponse = await retryHttpClientResponse(
     `uploadChunk (start: ${start}, end: ${end})`,
     async () =>
-      httpClient.sendStream(
-        'PATCH',
-        resourceUrl,
-        openStream(),
-        additionalHeaders
-      )
+      httpClient.sendStream('PUT', resourceUrl, openStream(), additionalHeaders)
   )
 
   if (!isSuccessStatusCode(uploadChunkResponse.message.statusCode)) {
+    core.debug(
+      `Upload chunk failed with status message: ${JSON.stringify(
+        uploadChunkResponse.message.statusMessage
+      )}`
+    )
+    core.debug(
+      `Upload chunk failed with headers: ${JSON.stringify(
+        uploadChunkResponse.message.headers
+      )}`
+    )
+    core.debug(
+      `Upload chunk failed with response body: ${await uploadChunkResponse.readBody()}`
+    )
     throw new Error(
       `Cache service responded with ${uploadChunkResponse.message.statusCode} during upload chunk.`
     )
@@ -275,60 +288,84 @@ async function uploadChunk(
 
 async function uploadFile(
   httpClient: HttpClient,
-  cacheId: number,
   archivePath: string,
-  options?: UploadOptions
+  urls: string[]
 ): Promise<void> {
   // Upload Chunks
+  core.debug(`archivePath: ${archivePath}`)
   const fileSize = utils.getArchiveFileSizeInBytes(archivePath)
-  const resourceUrl = getCacheApiUrl(`caches/${cacheId.toString()}`)
   const fd = fs.openSync(archivePath, 'r')
-  const uploadOptions = getUploadOptions(options)
 
-  const concurrency = utils.assertDefined(
-    'uploadConcurrency',
-    uploadOptions.uploadConcurrency
-  )
-  const maxChunkSize = utils.assertDefined(
-    'uploadChunkSize',
-    uploadOptions.uploadChunkSize
-  )
+  const maxChunkSize = 4 * 1024 * 1024 // Matches the chunkSize in our cache service.
 
-  const parallelUploads = [...new Array(concurrency).keys()]
   core.debug('Awaiting all uploads')
-  let offset = 0
 
   try {
-    await Promise.all(
-      parallelUploads.map(async () => {
-        while (offset < fileSize) {
-          const chunkSize = Math.min(fileSize - offset, maxChunkSize)
-          const start = offset
-          const end = offset + chunkSize - 1
-          offset += maxChunkSize
+    let offset = 0
+    for (const url of urls) {
+      const start = offset
+      const chunkSize = Math.min(fileSize - offset, maxChunkSize)
+      const end = offset + chunkSize - 1
+      offset += chunkSize
+      core.debug(`Uploading chunk to ${url}: ${start}-${end}/${fileSize}`)
 
-          await uploadChunk(
-            httpClient,
-            resourceUrl,
-            () =>
-              fs
-                .createReadStream(archivePath, {
-                  fd,
-                  start,
-                  end,
-                  autoClose: false
-                })
-                .on('error', error => {
-                  throw new Error(
-                    `Cache upload failed because file read failed with ${error.message}`
-                  )
-                }),
-            start,
-            end
-          )
-        }
-      })
-    )
+      await uploadChunk(
+        httpClient,
+        url,
+        () =>
+          fs
+            .createReadStream(archivePath, {
+              fd,
+              start,
+              end,
+              autoClose: false
+            })
+            .on('error', error => {
+              throw new Error(
+                `Cache upload failed because file read failed with ${error.message}`
+              )
+            }),
+        start,
+        end
+      )
+      core.debug(`Upload to ${url} complete`)
+    }
+    // await Promise.all(
+    //   urls.map(async (url, index) => {
+    //     const offset = index * maxChunkSize
+    //     const chunkSize = Math.min(fileSize - offset, maxChunkSize)
+    //     const start = offset
+    //     let end = offset + chunkSize - 1
+    //     if (chunkSize !== maxChunkSize) {
+    //       end = fileSize - 1
+    //     }
+    //     core.debug(`Uploading chunk to ${url}: ${start}-${end}/${fileSize}`)
+
+    //     await uploadChunk(
+    //       httpClient,
+    //       url,
+    //       () =>
+    //         fs
+    //           .createReadStream(archivePath, {
+    //             fd,
+    //             start,
+    //             end,
+    //             autoClose: false
+    //           })
+    //           .on('error', error => {
+    //             throw new Error(
+    //               `Cache upload failed because file read failed with ${error.message}`
+    //             )
+    //           }),
+    //       start,
+    //       end
+    //     )
+    //     core.debug(`Upload to ${url} complete`)
+    //   })
+    // )
+  } catch (error) {
+    core.debug(`Cache upload failed: ${JSON.stringify(error)}`)
+    throw error
   } finally {
     fs.closeSync(fd)
   }
@@ -352,12 +389,12 @@ async function commitCache(
 export async function saveCache(
   cacheId: number,
   archivePath: string,
-  options?: UploadOptions
+  urls: string[]
 ): Promise<void> {
   const httpClient = createHttpClient()
 
   core.debug('Upload cache')
-  await uploadFile(httpClient, cacheId, archivePath, options)
+  await uploadFile(httpClient, archivePath, urls)
 
   // Commit Cache
   core.debug('Commiting cache')
