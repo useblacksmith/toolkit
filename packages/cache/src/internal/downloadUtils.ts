@@ -22,10 +22,20 @@ import {AbortController} from '@azure/abort-controller'
  */
 async function pipeResponseToStream(
   response: HttpClientResponse,
-  output: NodeJS.WritableStream
+  output: NodeJS.WritableStream,
+  progress?: DownloadProgress
 ): Promise<void> {
   const pipeline = util.promisify(stream.pipeline)
-  await pipeline(response.message, output)
+  const reportProgress = new stream.Transform({
+    transform(chunk, _encoding, callback) {
+      if (progress) {
+        progress.setReceivedBytes(progress.getTransferredBytes() + chunk.length)
+      }
+      this.push(chunk)
+      callback()
+    }
+  })
+  await pipeline(response.message, reportProgress, output)
 }
 
 /**
@@ -171,35 +181,83 @@ export async function downloadCacheHttpClient(
   archiveLocation: string,
   archivePath: string
 ): Promise<void> {
-  const writeStream = fs.createWriteStream(archivePath)
-  const httpClient = new HttpClient('actions/cache')
-  const downloadResponse = await retryHttpClientResponse(
-    'downloadCache',
-    async () => httpClient.get(archiveLocation)
-  )
+  const CONCURRENCY = 8
+  const fdesc = await fs.promises.open(archivePath, 'w+')
+  // Set file permissions so that other users can untar the cache
+  await fdesc.chmod(0o644)
+  let progressLogger
+  try {
+    core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
+    const httpClient = new HttpClient('useblacksmith/cache')
+    const metadataResponse = await retryHttpClientResponse(
+      'downloadCache',
+      async () =>
+        httpClient.get(archiveLocation, {
+          Range: 'bytes=0-1'
+        })
+    )
+    // Abort download if no traffic received over the socket.
+    metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
+      metadataResponse.message.destroy()
+      core.debug(
+        `Aborting download, socket timed out after ${SocketTimeout} ms`
+      )
+    })
 
-  // Abort download if no traffic received over the socket.
-  downloadResponse.message.socket.setTimeout(SocketTimeout, () => {
-    downloadResponse.message.destroy()
-    core.debug(`Aborting download, socket timed out after ${SocketTimeout} ms`)
-  })
-
-  await pipeResponseToStream(downloadResponse, writeStream)
-
-  // Validate download size.
-  const contentLengthHeader = downloadResponse.message.headers['content-length']
-
-  if (contentLengthHeader) {
-    const expectedLength = parseInt(contentLengthHeader)
-    const actualLength = utils.getArchiveFileSizeInBytes(archivePath)
-
-    if (actualLength !== expectedLength) {
+    const contentRangeHeader = metadataResponse.message.headers['content-range']
+    if (!contentRangeHeader) {
       throw new Error(
-        `Incomplete download. Expected file size: ${expectedLength}, actual file size: ${actualLength}`
+        'Content-Range is not defined; unable to determine file size'
       )
     }
-  } else {
-    core.debug('Unable to validate download, no Content-Length header')
+
+    // Parse the total file size from the Content-Range header
+    const fileSize = parseInt(contentRangeHeader.split('/')[1])
+    if (isNaN(fileSize)) {
+      throw new Error(
+        `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
+      )
+    }
+    core.debug(`fileSize: ${fileSize}`)
+
+    // Truncate the file to the correct size
+    await fdesc.truncate(fileSize)
+    await fdesc.sync()
+
+    progressLogger = new DownloadProgress(fileSize)
+    progressLogger.startDisplayTimer()
+
+    // Divvy up the download into chunks based on CONCURRENCY
+    const chunkSize = Math.ceil(fileSize / CONCURRENCY)
+    const chunkRanges: string[] = []
+    for (let i = 0; i < CONCURRENCY; i++) {
+      const start = i * chunkSize
+      const end = i === CONCURRENCY - 1 ? fileSize - 1 : (i + 1) * chunkSize - 1
+      chunkRanges.push(`bytes=${start}-${end}`)
+    }
+
+    const downloads = chunkRanges.map(async range => {
+      core.debug(`Downloading range: ${range}`)
+      const response = await retryHttpClientResponse(
+        'downloadCache',
+        async () =>
+          httpClient.get(archiveLocation, {
+            Range: range
+          })
+      )
+      const writeStream = fs.createWriteStream(archivePath, {
+        fd: fdesc.fd,
+        start: parseInt(range.split('=')[1].split('-')[0]),
+        autoClose: false
+      })
+      await pipeResponseToStream(response, writeStream, progressLogger)
+      core.debug(`Finished downloading range: ${range}`)
+    })
+
+    await Promise.all(downloads)
+  } finally {
+    await fdesc.close()
+    progressLogger?.stopDisplayTimer()
   }
 }
 
@@ -215,6 +273,7 @@ export async function downloadCacheHttpClientConcurrent(
   options: DownloadOptions
 ): Promise<void> {
   const archiveDescriptor = await fs.promises.open(archivePath, 'w')
+  core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
   const httpClient = new HttpClient('actions/cache', undefined, {
     socketTimeout: options.timeoutInMs,
     keepAlive: true

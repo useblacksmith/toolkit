@@ -106,7 +106,7 @@ export function getDownloadOptions(copy?: DownloadOptions): DownloadOptions {
   const result: DownloadOptions = {
     useAzureSdk: false,
     concurrentBlobDownloads: true,
-    downloadConcurrency: 8,
+    downloadConcurrency: 10,
     timeoutInMs: 30000,
     segmentTimeoutInMs: 600000,
     lookupOnly: false

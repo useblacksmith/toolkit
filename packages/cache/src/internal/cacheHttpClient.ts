@@ -25,12 +25,7 @@ import {
   downloadCacheHttpClientConcurrent,
   downloadCacheStorageSDK
 } from './downloadUtils'
-import {
-  DownloadOptions,
-  UploadOptions,
-  getDownloadOptions,
-  getUploadOptions
-} from '../options'
+import {DownloadOptions, getDownloadOptions} from '../options'
 import {
   isSuccessStatusCode,
   retryHttpClientResponse,
@@ -41,14 +36,13 @@ const versionSalt = '1.0'
 
 function getCacheApiUrl(resource: string): string {
   const baseUrl: string =
-    process.env['BLACKSMITH_CACHE_URL'] ||
-    'https://stagingapi.blacksmith.sh/cache'
+    process.env['BLACKSMITH_CACHE_URL'] || 'https://api.blacksmith.sh/cache'
   if (!baseUrl) {
     throw new Error('Cache Service Url not found, unable to restore cache.')
   }
 
   const url = `${baseUrl}/${resource}`
-  core.debug(`Blacksmith cache resource URL: ${url}; version: 3.2.22`)
+  core.debug(`Blacksmith cache resource URL: ${url}; version: 3.2.40`)
   return url
 }
 
@@ -57,11 +51,11 @@ function createAcceptHeader(type: string, apiVersion: string): string {
 }
 
 function getRequestOptions(): RequestOptions {
+  core.debug(`Setting GITHUB_REPO_NAME: ${process.env['GITHUB_REPO_NAME']}`)
   const requestOptions: RequestOptions = {
     headers: {
-      Accept: createAcceptHeader('application/json', '6.0-preview.1')
-      // 'X-Github-Org-Name': process.env['GITHUB_ORG_NAME'],
-      // 'X-Github-Repo-Name': process.env['GITHUB_REPO_NAME']
+      Accept: createAcceptHeader('application/json', '6.0-preview.1'),
+      'X-Github-Repo-Name': process.env['GITHUB_REPO_NAME']
     }
   }
 
@@ -69,8 +63,8 @@ function getRequestOptions(): RequestOptions {
 }
 
 function createHttpClient(): HttpClient {
-  const token = '1|l3TWBBP8vaRKLVzXtPWTsak7JSNBvcSLKsQC3V6Rc4f7fe0d'
-  const bearerCredentialHandler = new BearerCredentialHandler(token)
+  const token = process.env['BLACKSMITH_CACHE_TOKEN']
+  const bearerCredentialHandler = new BearerCredentialHandler(token ?? '')
 
   return new HttpClient(
     'useblacksmith/cache',
@@ -240,12 +234,11 @@ function getContentRange(start: number, end: number): string {
 }
 
 async function uploadChunk(
-  httpClient: HttpClient,
   resourceUrl: string,
   openStream: () => NodeJS.ReadableStream,
   start: number,
   end: number
-): Promise<void> {
+): Promise<string | undefined> {
   core.debug(
     `Uploading chunk of size ${
       end - start + 1
@@ -257,13 +250,18 @@ async function uploadChunk(
   const additionalHeaders = {
     'Content-Type': 'application/octet-stream',
     'Content-Length': end - start + 1
-    // Host: 'blacksmith-cache.fra1.digitaloceanspaces.com'
   }
 
+  const s3HttpClient = new HttpClient('useblacksmith/cache')
   const uploadChunkResponse = await retryHttpClientResponse(
     `uploadChunk (start: ${start}, end: ${end})`,
     async () =>
-      httpClient.sendStream('PUT', resourceUrl, openStream(), additionalHeaders)
+      s3HttpClient.sendStream(
+        'PUT',
+        resourceUrl,
+        openStream(),
+        additionalHeaders
+      )
   )
 
   if (!isSuccessStatusCode(uploadChunkResponse.message.statusCode)) {
@@ -284,100 +282,80 @@ async function uploadChunk(
       `Cache service responded with ${uploadChunkResponse.message.statusCode} during upload chunk.`
     )
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return uploadChunkResponse.message.headers.etag!
 }
 
 async function uploadFile(
-  httpClient: HttpClient,
   archivePath: string,
   urls: string[]
-): Promise<void> {
+): Promise<string[]> {
   // Upload Chunks
   core.debug(`archivePath: ${archivePath}`)
   const fileSize = utils.getArchiveFileSizeInBytes(archivePath)
   const fd = fs.openSync(archivePath, 'r')
 
-  const maxChunkSize = 4 * 1024 * 1024 // Matches the chunkSize in our cache service.
+  const maxChunkSize = 25 * 1024 * 1024 // Matches the chunkSize in our cache service.
 
   core.debug('Awaiting all uploads')
+  let eTags: string[] = []
 
   try {
-    let offset = 0
-    for (const url of urls) {
-      const start = offset
-      const chunkSize = Math.min(fileSize - offset, maxChunkSize)
-      const end = offset + chunkSize - 1
-      offset += chunkSize
-      core.debug(`Uploading chunk to ${url}: ${start}-${end}/${fileSize}`)
+    eTags = await Promise.all(
+      urls.map(async (url, index) => {
+        const offset = index * maxChunkSize
+        const chunkSize = Math.min(fileSize - offset, maxChunkSize)
+        const start = offset
+        let end = offset + chunkSize - 1
+        if (chunkSize !== maxChunkSize) {
+          end = fileSize - 1
+        }
+        core.debug(`Uploading chunk to ${url}: ${start}-${end}/${fileSize}`)
 
-      await uploadChunk(
-        httpClient,
-        url,
-        () =>
-          fs
-            .createReadStream(archivePath, {
-              fd,
-              start,
-              end,
-              autoClose: false
-            })
-            .on('error', error => {
-              throw new Error(
-                `Cache upload failed because file read failed with ${error.message}`
-              )
-            }),
-        start,
-        end
-      )
-      core.debug(`Upload to ${url} complete`)
-    }
-    // await Promise.all(
-    //   urls.map(async (url, index) => {
-    //     const offset = index * maxChunkSize
-    //     const chunkSize = Math.min(fileSize - offset, maxChunkSize)
-    //     const start = offset
-    //     let end = offset + chunkSize - 1
-    //     if (chunkSize !== maxChunkSize) {
-    //       end = fileSize - 1
-    //     }
-    //     core.debug(`Uploading chunk to ${url}: ${start}-${end}/${fileSize}`)
-
-    //     await uploadChunk(
-    //       httpClient,
-    //       url,
-    //       () =>
-    //         fs
-    //           .createReadStream(archivePath, {
-    //             fd,
-    //             start,
-    //             end,
-    //             autoClose: false
-    //           })
-    //           .on('error', error => {
-    //             throw new Error(
-    //               `Cache upload failed because file read failed with ${error.message}`
-    //             )
-    //           }),
-    //       start,
-    //       end
-    //     )
-    //     core.debug(`Upload to ${url} complete`)
-    //   })
-    // )
+        const eTag = await uploadChunk(
+          url,
+          () =>
+            fs
+              .createReadStream(archivePath, {
+                fd,
+                start,
+                end,
+                autoClose: false
+              })
+              .on('error', error => {
+                throw new Error(
+                  `Cache upload failed because file read failed with ${error.message}`
+                )
+              }),
+          start,
+          end
+        )
+        core.debug(`Upload to ${url} complete`)
+        return eTag ?? ''
+      })
+    )
   } catch (error) {
     core.debug(`Cache upload failed: ${JSON.stringify(error)}`)
     throw error
   } finally {
     fs.closeSync(fd)
   }
-  return
+  return eTags
 }
 
 async function commitCache(
   httpClient: HttpClient,
   cacheId: number,
-  filesize: number
+  filesize: number,
+  eTags: string[],
+  uploadId: string
 ): Promise<TypedResponse<null>> {
-  const commitCacheRequest: CommitCacheRequest = {size: filesize}
+  const commitCacheRequest: CommitCacheRequest = {
+    size: filesize,
+    eTags,
+    uploadId
+  }
   return await retryTypedResponse('commitCache', async () =>
     httpClient.postJson<null>(
       getCacheApiUrl(`caches/${cacheId.toString()}`),
@@ -389,12 +367,13 @@ async function commitCache(
 export async function saveCache(
   cacheId: number,
   archivePath: string,
-  urls: string[]
+  urls: string[],
+  uploadId: string
 ): Promise<void> {
   const httpClient = createHttpClient()
 
   core.debug('Upload cache')
-  await uploadFile(httpClient, archivePath, urls)
+  const eTags = await uploadFile(archivePath, urls)
 
   // Commit Cache
   core.debug('Commiting cache')
@@ -403,7 +382,13 @@ export async function saveCache(
     `Cache Size: ~${Math.round(cacheSize / (1024 * 1024))} MB (${cacheSize} B)`
   )
 
-  const commitCacheResponse = await commitCache(httpClient, cacheId, cacheSize)
+  const commitCacheResponse = await commitCache(
+    httpClient,
+    cacheId,
+    cacheSize,
+    eTags,
+    uploadId
+  )
   if (!isSuccessStatusCode(commitCacheResponse.statusCode)) {
     throw new Error(
       `Cache service responded with ${commitCacheResponse.statusCode} during commit cache.`

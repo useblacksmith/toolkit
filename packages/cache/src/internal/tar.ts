@@ -11,6 +11,7 @@ import {
   TarFilename,
   ManifestFilename
 } from './constants'
+import { coerce } from 'semver'
 
 const IS_WINDOWS = process.platform === 'win32'
 

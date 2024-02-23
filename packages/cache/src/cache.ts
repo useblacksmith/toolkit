@@ -240,7 +240,8 @@ export async function saveCache(
     await cacheHttpClient.saveCache(
       cacheId,
       archivePath,
-      reserveCacheResponse.result?.uploadUrls ?? []
+      reserveCacheResponse.result?.uploadUrls ?? [],
+      reserveCacheResponse.result?.uploadId ?? ''
     )
   } catch (error) {
     const typedError = error as Error

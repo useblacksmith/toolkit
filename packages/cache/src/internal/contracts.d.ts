@@ -21,6 +21,8 @@ export interface ArtifactCacheList {
 
 export interface CommitCacheRequest {
   size: number
+  eTags: string[]
+  uploadId: string
 }
 
 export interface ReserveCacheRequest {
