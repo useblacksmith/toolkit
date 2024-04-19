@@ -227,6 +227,7 @@ export async function downloadCacheHttpClient(
     progressLogger = new DownloadProgress(fileSize)
     progressLogger.startDisplayTimer()
 
+    core.info(`Downloading ${archivePath}`)
     // Divvy up the download into chunks based on CONCURRENCY
     const chunkSize = Math.ceil(fileSize / CONCURRENCY)
     const chunkRanges: string[] = []
