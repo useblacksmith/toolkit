@@ -255,9 +255,19 @@ export async function downloadCacheHttpClient(
     })
 
     await Promise.all(downloads)
+  } catch (err) {
+    core.warning(`Failed to download cache: ${err}`)
+    throw err
   } finally {
-    await fdesc.close()
+    // Stop the progress logger regardless of whether the download succeeded or failed.
+    // Not doing this will cause the entire action to halt if the download fails.
     progressLogger?.stopDisplayTimer()
+    try {
+      await fdesc.close()
+    } catch (err) {
+      // Intentionally swallow any errors in closing the file descriptor.
+      core.warning(`Failed to close file descriptor: ${err}`)
+    }
   }
 }
 
