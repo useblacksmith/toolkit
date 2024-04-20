@@ -144,13 +144,37 @@ export async function restoreCache(
   } finally {
     // Try to delete the archive to save space
     try {
-      await utils.unlinkFile(archivePath)
+      const before = Date.now()
+      await unlinkWithTimeout(archivePath, 5000)
+      core.info(`cleaning up archive took ${Date.now() - before}ms`)
     } catch (error) {
       core.debug(`Failed to delete archive: ${error}`)
     }
   }
 
   return undefined
+}
+
+async function unlinkWithTimeout(
+  path: string,
+  timeoutMs: number
+): Promise<void> {
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error('Unlink operation timed out'))
+    }, timeoutMs)
+  })
+
+  try {
+    await Promise.race([utils.unlinkFile(path), timeout])
+  } catch (error) {
+    if (error.message === 'Unlink operation timed out') {
+      core.warning('Unlink operation exceeded the timeout of ${timeoutMs}ms')
+    } else {
+      core.warning('Unlink operation failed:', error)
+    }
+    throw error
+  }
 }
 
 /**
