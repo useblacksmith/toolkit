@@ -139,7 +139,13 @@ export async function restoreCache(
       throw error
     } else {
       // Supress all non-validation cache related errors because caching should be optional
-      core.warning(`Failed to restore: ${(error as Error).message}`)
+      if (
+        (error as Error).message.includes(`Cache service responded with 404`)
+      ) {
+        core.info(`Did not get a cache hit; proceeding as an uncached run`)
+      } else {
+        core.warning(`Failed to restore: ${(error as Error).message}`)
+      }
     }
   } finally {
     // Try to delete the archive to save space
@@ -169,9 +175,9 @@ async function unlinkWithTimeout(
     await Promise.race([utils.unlinkFile(path), timeout])
   } catch (error) {
     if (error.message === 'Unlink operation timed out') {
-      core.warning('Unlink operation exceeded the timeout of ${timeoutMs}ms')
+      core.warning(`Unlink operation exceeded the timeout of ${timeoutMs}ms`)
     } else {
-      core.warning('Unlink operation failed:', error)
+      core.debug(`Failed to delete archive: ${error}`)
     }
     throw error
   }
