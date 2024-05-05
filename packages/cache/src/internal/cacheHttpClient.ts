@@ -21,6 +21,8 @@ import {
   ArtifactCacheList
 } from './contracts'
 import {
+  downloadCacheAxiosMultiPart,
+  downloadCacheAxiosSinglePart,
   downloadCacheHttpClient,
   downloadCacheHttpClientConcurrent,
   downloadCacheStorageSDK
@@ -193,7 +195,11 @@ export async function downloadCache(
       await downloadCacheHttpClient(archiveLocation, archivePath)
     }
   } else {
-    await downloadCacheHttpClient(archiveLocation, archivePath)
+    await downloadCacheHttpClientConcurrent(
+      archiveLocation,
+      archivePath,
+      downloadOptions
+    )
   }
 }
 

@@ -7,12 +7,16 @@ import * as fs from 'fs'
 import * as stream from 'stream'
 import * as util from 'util'
 
-import * as utils from './cacheUtils'
 import {SocketTimeout} from './constants'
 import {DownloadOptions} from '../options'
 import {retryHttpClientResponse} from './requestUtils'
 
 import {AbortController} from '@azure/abort-controller'
+import axiosRetry from 'axios-retry'
+import axios, {AxiosResponse} from 'axios'
+import {writeFileSync} from 'fs'
+import {ExecListeners} from '../../../exec/lib/interfaces'
+import {ArtifactCacheEntry} from './contracts'
 
 /**
  * Pipes the body of a HTTP response to a stream
@@ -36,6 +40,23 @@ async function pipeResponseToStream(
     }
   })
   await pipeline(response.message, reportProgress, output)
+}
+
+async function pipeAxiosResponseToStream(
+  response: AxiosResponse,
+  output: NodeJS.WritableStream,
+  progress?: DownloadProgress
+): Promise<void> {
+  const reportProgress = new stream.Transform({
+    transform(chunk, _encoding, callback) {
+      if (progress) {
+        progress.setReceivedBytes(progress.getTransferredBytes() + chunk.length)
+      }
+      this.push(chunk)
+      callback()
+    }
+  })
+  await response.data.pipe(reportProgress).pipe(output)
 }
 
 /**
@@ -171,6 +192,196 @@ export class DownloadProgress {
   }
 }
 
+// Downloads the cache using axios without splitting the file into chunks
+export async function downloadCacheAxiosSinglePart(
+  archiveLocation: string,
+  archivePath: string
+): Promise<void> {
+  const fdesc = await fs.promises.open(archivePath, 'w+')
+  // Set file permissions so that other users can untar the cache
+  await fdesc.chmod(0o644)
+  core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
+  const httpClient = new HttpClient('useblacksmith/cache')
+  const metadataResponse = await retryHttpClientResponse(
+    'downloadCache',
+    async () =>
+      httpClient.get(archiveLocation, {
+        Range: 'bytes=0-1'
+      })
+  )
+  // Abort download if no traffic received over the socket.
+  metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
+    metadataResponse.message.destroy()
+    core.debug(`Aborting download, socket timed out after ${SocketTimeout} ms`)
+  })
+
+  const contentRangeHeader = metadataResponse.message.headers['content-range']
+  if (!contentRangeHeader) {
+    throw new Error(
+      'Content-Range is not defined; unable to determine file size'
+    )
+  }
+
+  // Parse the total file size from the Content-Range header
+  const fileSize = parseInt(contentRangeHeader.split('/')[1])
+  if (isNaN(fileSize)) {
+    throw new Error(
+      `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
+    )
+  }
+  core.info(`File size: ${fileSize}`)
+
+  // Truncate the file to the correct size
+  await fdesc.truncate(fileSize)
+  await fdesc.sync()
+
+  // Configure axios-retry
+  axiosRetry(axios, {
+    retries: 3,
+    // No retry delay for axios-retry.
+    shouldResetTimeout: true,
+    retryCondition: error => {
+      // Retry on all errors except 404.
+      return error.response?.status !== 404
+    }
+  })
+  try {
+    const before = Date.now()
+    const downloadResponse = await axios.get(archiveLocation, {
+      responseType: 'stream'
+    })
+
+    await pipeAxiosResponseToStream(
+      downloadResponse,
+      fs.createWriteStream(archivePath, {
+        fd: fdesc.fd,
+        start: 0,
+        autoClose: false
+      })
+    )
+    core.info(
+      `Took ${Date.now() - before}ms to download; speed: ${
+        (downloadResponse.headers['content-length'] as number) /
+        (Date.now() - before)
+      } MB/s`
+    )
+  } finally {
+    await fdesc.close()
+  }
+}
+
+export async function downloadCacheAxiosMultiPart(
+  archiveLocation: string,
+  archivePath: string
+): Promise<void> {
+  const CONCURRENCY = 8
+  // Open a file descriptor for the cache file
+  const fdesc = await fs.promises.open(archivePath, 'w+')
+  // Set file permissions so that other users can untar the cache
+  await fdesc.chmod(0o644)
+  let progressLogger
+
+  // Configure axios-retry
+  axiosRetry(axios, {
+    retries: 3,
+    // No retry delay for axios-retry.
+    shouldResetTimeout: true,
+    retryCondition: error => {
+      // Retry on all errors except 404.
+      return error.response?.status !== 404
+    }
+  })
+
+  try {
+    core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
+    const metadataResponse: AxiosResponse = await axios.get(archiveLocation, {
+      headers: {Range: 'bytes=0-1'}
+    })
+
+    const contentRangeHeader = metadataResponse.headers['content-range']
+    if (!contentRangeHeader) {
+      throw new Error(
+        'Content-Range is not defined; unable to determine file size'
+      )
+    }
+
+    // Parse the total file size from the Content-Range header
+    const fileSize = parseInt(contentRangeHeader.split('/')[1])
+    if (isNaN(fileSize)) {
+      throw new Error(
+        `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
+      )
+    }
+    core.info(`Cached file size: ${fileSize}`)
+
+    // Truncate the file to the correct size
+    await fdesc.truncate(fileSize)
+    await fdesc.sync()
+
+    progressLogger = new DownloadProgress(fileSize)
+    progressLogger.startDisplayTimer()
+
+    core.info(`Downloading ${archivePath}`)
+    // Divvy up the download into chunks based on CONCURRENCY
+    const chunkSize = Math.ceil(fileSize / CONCURRENCY)
+    const chunkRanges: string[] = []
+    for (let i = 0; i < CONCURRENCY; i++) {
+      const start = i * chunkSize
+      const end = i === CONCURRENCY - 1 ? fileSize - 1 : (i + 1) * chunkSize - 1
+      chunkRanges.push(`bytes=${start}-${end}`)
+    }
+
+    let activeChunks = chunkRanges.length
+    const downloads = chunkRanges.map(async range => {
+      core.debug(`Downloading range: ${range}`)
+      const response: AxiosResponse = await axios.get(archiveLocation, {
+        headers: {Range: range},
+        responseType: 'stream'
+      })
+      const reportProgress = new stream.Transform({
+        transform(chunk, _encoding, callback) {
+          if (progressLogger) {
+            progressLogger.setReceivedBytes(
+              progressLogger.getTransferredBytes() + chunk.length
+            )
+          }
+          this.push(chunk)
+          callback()
+        }
+      })
+
+      const start = parseInt(range.split('=')[1].split('-')[0])
+      await response.data.pipe(reportProgress).pipe(
+        new stream.Writable({
+          async write(chunk, _encoding, callback) {
+            await fdesc.write(chunk, 0 /* offset */, chunk.length, start)
+            activeChunks--
+            core.info(`Finishing writing chunk: ${start}`)
+            callback()
+          }
+        })
+      )
+      core.info(`Finished downloading range: ${range}`)
+    })
+
+    await Promise.all(downloads)
+    // Wait for all chunks to be written
+    while (activeChunks > 0) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  } catch (err) {
+    core.warning(`Failed to download cache: ${err.message}`)
+    throw err
+  } finally {
+    progressLogger?.stopDisplayTimer(true)
+    try {
+      await fdesc.close()
+    } catch (err) {
+      core.warning(`Failed to close file descriptor: ${err}`)
+    }
+  }
+}
+
 /**
  * Download the cache using the Actions toolkit http-client
  *
@@ -283,7 +494,9 @@ export async function downloadCacheHttpClientConcurrent(
   archivePath: fs.PathLike,
   options: DownloadOptions
 ): Promise<void> {
-  const archiveDescriptor = await fs.promises.open(archivePath, 'w')
+  const archiveDescriptor = await fs.promises.open(archivePath, 'w+')
+  // Set file permissions so that other users can untar the cache
+  await archiveDescriptor.chmod(0o644)
   core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
   const httpClient = new HttpClient('actions/cache', undefined, {
     socketTimeout: options.timeoutInMs,
