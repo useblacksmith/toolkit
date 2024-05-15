@@ -1,6 +1,6 @@
 {
   "name": "@useblacksmith/cache",
-  "version": "3.2.64",
+  "version": "3.2.76",
   "preview": true,
   "description": "Blacksmith Actions cache lib",
   "keywords": [

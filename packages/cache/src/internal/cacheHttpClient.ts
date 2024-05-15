@@ -22,7 +22,6 @@ import {
 } from './contracts'
 import {
   downloadCacheAxiosMultiPart,
-  downloadCacheAxiosSinglePart,
   downloadCacheHttpClient,
   downloadCacheHttpClientConcurrent,
   downloadCacheStorageSDK
@@ -195,11 +194,7 @@ export async function downloadCache(
       await downloadCacheHttpClient(archiveLocation, archivePath)
     }
   } else {
-    await downloadCacheHttpClientConcurrent(
-      archiveLocation,
-      archivePath,
-      downloadOptions
-    )
+    await downloadCacheAxiosMultiPart(archiveLocation, archivePath)
   }
 }
 

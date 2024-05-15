@@ -14,9 +14,6 @@ import {retryHttpClientResponse} from './requestUtils'
 import {AbortController} from '@azure/abort-controller'
 import axiosRetry from 'axios-retry'
 import axios, {AxiosResponse} from 'axios'
-import {writeFileSync} from 'fs'
-import {ExecListeners} from '../../../exec/lib/interfaces'
-import {ArtifactCacheEntry} from './contracts'
 
 /**
  * Pipes the body of a HTTP response to a stream
@@ -192,89 +189,12 @@ export class DownloadProgress {
   }
 }
 
-// Downloads the cache using axios without splitting the file into chunks
-export async function downloadCacheAxiosSinglePart(
-  archiveLocation: string,
-  archivePath: string
-): Promise<void> {
-  const fdesc = await fs.promises.open(archivePath, 'w+')
-  // Set file permissions so that other users can untar the cache
-  await fdesc.chmod(0o644)
-  core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
-  const httpClient = new HttpClient('useblacksmith/cache')
-  const metadataResponse = await retryHttpClientResponse(
-    'downloadCache',
-    async () =>
-      httpClient.get(archiveLocation, {
-        Range: 'bytes=0-1'
-      })
-  )
-  // Abort download if no traffic received over the socket.
-  metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
-    metadataResponse.message.destroy()
-    core.debug(`Aborting download, socket timed out after ${SocketTimeout} ms`)
-  })
-
-  const contentRangeHeader = metadataResponse.message.headers['content-range']
-  if (!contentRangeHeader) {
-    throw new Error(
-      'Content-Range is not defined; unable to determine file size'
-    )
-  }
-
-  // Parse the total file size from the Content-Range header
-  const fileSize = parseInt(contentRangeHeader.split('/')[1])
-  if (isNaN(fileSize)) {
-    throw new Error(
-      `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
-    )
-  }
-  core.info(`File size: ${fileSize}`)
-
-  // Truncate the file to the correct size
-  await fdesc.truncate(fileSize)
-  await fdesc.sync()
-
-  // Configure axios-retry
-  axiosRetry(axios, {
-    retries: 3,
-    // No retry delay for axios-retry.
-    shouldResetTimeout: true,
-    retryCondition: error => {
-      // Retry on all errors except 404.
-      return error.response?.status !== 404
-    }
-  })
-  try {
-    const before = Date.now()
-    const downloadResponse = await axios.get(archiveLocation, {
-      responseType: 'stream'
-    })
-
-    await pipeAxiosResponseToStream(
-      downloadResponse,
-      fs.createWriteStream(archivePath, {
-        fd: fdesc.fd,
-        start: 0,
-        autoClose: false
-      })
-    )
-    core.info(
-      `Took ${Date.now() - before}ms to download; speed: ${
-        (downloadResponse.headers['content-length'] as number) /
-        (Date.now() - before)
-      } MB/s`
-    )
-  } finally {
-    await fdesc.close()
-  }
-}
-
 export async function downloadCacheAxiosMultiPart(
   archiveLocation: string,
   archivePath: string
 ): Promise<void> {
-  const CONCURRENCY = 8
+  const CONCURRENCY = 10
+  core.info(`Downloading with ${CONCURRENCY} concurrent requests`)
   // Open a file descriptor for the cache file
   const fdesc = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
@@ -331,7 +251,6 @@ export async function downloadCacheAxiosMultiPart(
       chunkRanges.push(`bytes=${start}-${end}`)
     }
 
-    let activeChunks = chunkRanges.length
     const downloads = chunkRanges.map(async range => {
       core.debug(`Downloading range: ${range}`)
       const response: AxiosResponse = await axios.get(archiveLocation, {
@@ -350,31 +269,37 @@ export async function downloadCacheAxiosMultiPart(
         }
       })
 
-      const start = parseInt(range.split('=')[1].split('-')[0])
-      await response.data.pipe(reportProgress).pipe(
-        new stream.Writable({
-          async write(chunk, _encoding, callback) {
-            await fdesc.write(chunk, 0 /* offset */, chunk.length, start)
-            activeChunks--
-            core.info(`Finishing writing chunk: ${start}`)
-            callback()
+      await new Promise((resolve, reject) => {
+        stream.pipeline(
+          response.data,
+          reportProgress,
+          fs.createWriteStream(archivePath, {
+            fd: fdesc.fd,
+            start: parseInt(range.split('=')[1].split('-')[0]),
+            autoClose: false
+          }),
+          err => {
+            if (err) {
+              reject(err)
+            } else {
+              resolve(null)
+            }
           }
-        })
-      )
-      core.info(`Finished downloading range: ${range}`)
+        )
+      })
     })
 
     await Promise.all(downloads)
-    // Wait for all chunks to be written
-    while (activeChunks > 0) {
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
   } catch (err) {
     core.warning(`Failed to download cache: ${err.message}`)
     throw err
   } finally {
     progressLogger?.stopDisplayTimer(true)
     try {
+      // NB: We're unsure why we're sometimes seeing a "EBADF: Bad file descriptor" error here.
+      //     It seems to be related to the fact that, sometimes, the file descriptor is closed before all
+      //     the chunks are written to it. This is a workaround to avoid the error.
+      await new Promise(resolve => setTimeout(resolve, 1000))
       await fdesc.close()
     } catch (err) {
       core.warning(`Failed to close file descriptor: ${err}`)
@@ -392,7 +317,7 @@ export async function downloadCacheHttpClient(
   archiveLocation: string,
   archivePath: string
 ): Promise<void> {
-  const CONCURRENCY = 8
+  const CONCURRENCY = 1
   const fdesc = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
   await fdesc.chmod(0o644)
@@ -475,6 +400,10 @@ export async function downloadCacheHttpClient(
     // Not doing this will cause the entire action to halt if the download fails.
     progressLogger?.stopDisplayTimer()
     try {
+      // NB: We're unsure why we're sometimes seeing a "EBADF: Bad file descriptor" error here.
+      //     It seems to be related to the fact that the file descriptor is closed before all
+      //     the chunks are written to it. This is a workaround to avoid the error.
+      await new Promise(resolve => setTimeout(resolve, 1000))
       await fdesc.close()
     } catch (err) {
       // Intentionally swallow any errors in closing the file descriptor.
