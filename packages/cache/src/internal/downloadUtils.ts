@@ -193,8 +193,16 @@ export async function downloadCacheAxiosMultiPart(
   archiveLocation: string,
   archivePath: string
 ): Promise<void> {
-  const CONCURRENCY = 10
-  core.info(`Downloading with ${CONCURRENCY} concurrent requests`)
+  let CONCURRENCY = 10
+  if (
+    process.env['GITHUB_REPO_NAME']?.includes('alcionai') ||
+    process.env['GITHUB_REPO_NAME']?.includes('FastActions')
+  ) {
+    CONCURRENCY = 10
+  }
+  if (CONCURRENCY > 1) {
+    core.info(`Downloading with ${CONCURRENCY} concurrent requests`)
+  }
   // Open a file descriptor for the cache file
   const fdesc = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
@@ -238,6 +246,9 @@ export async function downloadCacheAxiosMultiPart(
     await fdesc.truncate(fileSize)
     await fdesc.sync()
 
+    // Now that we've truncated the file to the correct size, we can close the file descriptor.
+    await fdesc.close()
+
     progressLogger = new DownloadProgress(fileSize)
     progressLogger.startDisplayTimer()
 
@@ -269,6 +280,18 @@ export async function downloadCacheAxiosMultiPart(
         }
       })
 
+      const fdesc = await fs.promises.open(archivePath, 'w+')
+      // progressLogger.setReceivedBytes(
+      //   progressLogger.getTransferredBytes() + response.data.length
+      // )
+      // // Write the chunk to the file at the correct offset.
+      // await fdesc.write(
+      //   response.data,
+      //   0,
+      //   response.data.length, // length of the buffer being written
+      //   parseInt(range.split('=')[1].split('-')[0]) // position
+      // )
+
       await new Promise((resolve, reject) => {
         stream.pipeline(
           response.data,
@@ -276,10 +299,11 @@ export async function downloadCacheAxiosMultiPart(
           fs.createWriteStream(archivePath, {
             fd: fdesc.fd,
             start: parseInt(range.split('=')[1].split('-')[0]),
-            autoClose: false
+            autoClose: true
           }),
           err => {
             if (err) {
+              core.warning(`Failed to write chunk: ${err.message}`)
               reject(err)
             } else {
               resolve(null)
@@ -300,7 +324,6 @@ export async function downloadCacheAxiosMultiPart(
       //     It seems to be related to the fact that, sometimes, the file descriptor is closed before all
       //     the chunks are written to it. This is a workaround to avoid the error.
       await new Promise(resolve => setTimeout(resolve, 1000))
-      await fdesc.close()
     } catch (err) {
       core.warning(`Failed to close file descriptor: ${err}`)
     }
