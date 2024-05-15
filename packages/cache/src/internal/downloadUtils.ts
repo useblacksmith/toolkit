@@ -280,7 +280,7 @@ export async function downloadCacheAxiosMultiPart(
         }
       })
 
-      const fdesc = await fs.promises.open(archivePath, 'w+')
+      const chunkFileDesc = await fs.promises.open(archivePath, 'w+')
       // progressLogger.setReceivedBytes(
       //   progressLogger.getTransferredBytes() + response.data.length
       // )
@@ -292,25 +292,38 @@ export async function downloadCacheAxiosMultiPart(
       //   parseInt(range.split('=')[1].split('-')[0]) // position
       // )
 
-      await new Promise((resolve, reject) => {
-        stream.pipeline(
-          response.data,
-          reportProgress,
-          fs.createWriteStream(archivePath, {
-            fd: fdesc.fd,
-            start: parseInt(range.split('=')[1].split('-')[0]),
-            autoClose: true
-          }),
-          err => {
-            if (err) {
-              core.warning(`Failed to write chunk: ${err.message}`)
-              reject(err)
-            } else {
-              resolve(null)
-            }
-          }
-        )
+      core.info(`Downloading range: ${range}`)
+      const finished = util.promisify(stream.finished)
+      const writer = fs.createWriteStream(archivePath, {
+        fd: chunkFileDesc.fd,
+        start: parseInt(range.split('=')[1].split('-')[0]),
+        autoClose: false
       })
+      await response.data.pipe(reportProgress).pipe(writer)
+      core.info(`finished piping response to writer for chunk ${range}`)
+      await finished(writer)
+      fdesc.close()
+      core.info(`finished closing writer for chunk ${range}`)
+      // const pipeline = util.promisify(stream.pipeline)
+      // await new Promise(async (resolve, reject) => {
+      //   return pipeline(
+      //     response.data,
+      //     reportProgress,
+      //     fs.createWriteStream(archivePath, {
+      //       fd: chunkFileDesc.fd,
+      //       start: parseInt(range.split('=')[1].split('-')[0]),
+      //       autoClose: true
+      //     }),
+      //     err => {
+      //       if (err) {
+      //         core.warning(`Failed to write chunk: ${err.message}`)
+      //         reject(err)
+      //       } else {
+      //         resolve(null)
+      //       }
+      //     }
+      //   )
+      // })
     })
 
     await Promise.all(downloads)
@@ -319,14 +332,14 @@ export async function downloadCacheAxiosMultiPart(
     throw err
   } finally {
     progressLogger?.stopDisplayTimer(true)
-    try {
-      // NB: We're unsure why we're sometimes seeing a "EBADF: Bad file descriptor" error here.
-      //     It seems to be related to the fact that, sometimes, the file descriptor is closed before all
-      //     the chunks are written to it. This is a workaround to avoid the error.
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    } catch (err) {
-      core.warning(`Failed to close file descriptor: ${err}`)
-    }
+    // try {
+    //   // NB: We're unsure why we're sometimes seeing a "EBADF: Bad file descriptor" error here.
+    //   //     It seems to be related to the fact that, sometimes, the file descriptor is closed before all
+    //   //     the chunks are written to it. This is a workaround to avoid the error.
+    //   await new Promise(resolve => setTimeout(resolve, 1000))
+    // } catch (err) {
+    //   core.warning(`Failed to close file descriptor: ${err}`)
+    // }
   }
 }
 
