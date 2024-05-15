@@ -193,16 +193,8 @@ export async function downloadCacheAxiosMultiPart(
   archiveLocation: string,
   archivePath: string
 ): Promise<void> {
-  let CONCURRENCY = 10
-  if (
-    process.env['GITHUB_REPO_NAME']?.includes('alcionai') ||
-    process.env['GITHUB_REPO_NAME']?.includes('FastActions')
-  ) {
-    CONCURRENCY = 10
-  }
-  if (CONCURRENCY > 1) {
-    core.info(`Downloading with ${CONCURRENCY} concurrent requests`)
-  }
+  const CONCURRENCY = 10
+  core.info(`Downloading with ${CONCURRENCY} concurrent requests`)
   // Open a file descriptor for the cache file
   const fdesc = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
@@ -280,50 +272,28 @@ export async function downloadCacheAxiosMultiPart(
         }
       })
 
-      const chunkFileDesc = await fs.promises.open(archivePath, 'w+')
-      // progressLogger.setReceivedBytes(
-      //   progressLogger.getTransferredBytes() + response.data.length
-      // )
-      // // Write the chunk to the file at the correct offset.
-      // await fdesc.write(
-      //   response.data,
-      //   0,
-      //   response.data.length, // length of the buffer being written
-      //   parseInt(range.split('=')[1].split('-')[0]) // position
-      // )
-
-      core.info(`Downloading range: ${range}`)
-      const finished = util.promisify(stream.finished)
-      const writer = fs.createWriteStream(archivePath, {
-        fd: chunkFileDesc.fd,
-        start: parseInt(range.split('=')[1].split('-')[0]),
-        autoClose: false
-      })
-      await response.data.pipe(reportProgress).pipe(writer)
-      core.info(`finished piping response to writer for chunk ${range}`)
-      await finished(writer)
-      fdesc.close()
-      core.info(`finished closing writer for chunk ${range}`)
-      // const pipeline = util.promisify(stream.pipeline)
-      // await new Promise(async (resolve, reject) => {
-      //   return pipeline(
-      //     response.data,
-      //     reportProgress,
-      //     fs.createWriteStream(archivePath, {
-      //       fd: chunkFileDesc.fd,
-      //       start: parseInt(range.split('=')[1].split('-')[0]),
-      //       autoClose: true
-      //     }),
-      //     err => {
-      //       if (err) {
-      //         core.warning(`Failed to write chunk: ${err.message}`)
-      //         reject(err)
-      //       } else {
-      //         resolve(null)
-      //       }
-      //     }
-      //   )
-      // })
+      const chunkFileDesc = await fs.promises.open(archivePath, 'r+')
+      try {
+        const finished = util.promisify(stream.finished)
+        const writer = fs.createWriteStream(archivePath, {
+          fd: chunkFileDesc.fd,
+          start: parseInt(range.split('=')[1].split('-')[0]),
+          autoClose: false
+        })
+        await response.data.pipe(reportProgress).pipe(writer)
+        await finished(writer)
+      } catch (err) {
+        core.warning(`Range ${range} failed to download: ${err.message}`)
+        throw err
+      } finally {
+        if (chunkFileDesc) {
+          try {
+            await chunkFileDesc.close()
+          } catch (err) {
+            core.warning(`Failed to close file descriptor: ${err}`)
+          }
+        }
+      }
     })
 
     await Promise.all(downloads)
@@ -332,14 +302,6 @@ export async function downloadCacheAxiosMultiPart(
     throw err
   } finally {
     progressLogger?.stopDisplayTimer(true)
-    // try {
-    //   // NB: We're unsure why we're sometimes seeing a "EBADF: Bad file descriptor" error here.
-    //   //     It seems to be related to the fact that, sometimes, the file descriptor is closed before all
-    //   //     the chunks are written to it. This is a workaround to avoid the error.
-    //   await new Promise(resolve => setTimeout(resolve, 1000))
-    // } catch (err) {
-    //   core.warning(`Failed to close file descriptor: ${err}`)
-    // }
   }
 }
 
