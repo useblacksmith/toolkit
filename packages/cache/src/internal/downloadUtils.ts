@@ -14,6 +14,7 @@ import {retryHttpClientResponse} from './requestUtils'
 import {AbortController} from '@azure/abort-controller'
 import axiosRetry from 'axios-retry'
 import axios, {AxiosResponse} from 'axios'
+import {FileHandle} from 'fs/promises'
 
 /**
  * Pipes the body of a HTTP response to a stream
@@ -248,13 +249,15 @@ export async function downloadCacheAxiosMultiPart(
     // Divvy up the download into chunks based on CONCURRENCY
     const chunkSize = Math.ceil(fileSize / CONCURRENCY)
     const chunkRanges: string[] = []
+    const fileDescriptors: FileHandle[] = []
     for (let i = 0; i < CONCURRENCY; i++) {
       const start = i * chunkSize
       const end = i === CONCURRENCY - 1 ? fileSize - 1 : (i + 1) * chunkSize - 1
       chunkRanges.push(`bytes=${start}-${end}`)
+      fileDescriptors.push(await fs.promises.open(archivePath, 'r+'))
     }
 
-    const downloads = chunkRanges.map(async range => {
+    const downloads = chunkRanges.map(async (range, index) => {
       core.debug(`Downloading range: ${range}`)
       const response: AxiosResponse = await axios.get(archiveLocation, {
         headers: {Range: range},
@@ -272,7 +275,7 @@ export async function downloadCacheAxiosMultiPart(
         }
       })
 
-      const chunkFileDesc = await fs.promises.open(archivePath, 'r+')
+      const chunkFileDesc = fileDescriptors[index]
       try {
         const finished = util.promisify(stream.finished)
         const writer = fs.createWriteStream(archivePath, {
@@ -430,19 +433,33 @@ export async function downloadCacheHttpClientConcurrent(
     keepAlive: true
   })
   try {
-    const res = await retryHttpClientResponse(
-      'downloadCacheMetadata',
-      async () => await httpClient.request('HEAD', archiveLocation, null, {})
+    const metadataResponse = await retryHttpClientResponse(
+      'downloadCache',
+      async () =>
+        httpClient.get(archiveLocation, {
+          Range: 'bytes=0-1'
+        })
     )
+    // Abort download if no traffic received over the socket.
+    metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
+      metadataResponse.message.destroy()
+      core.debug(
+        `Aborting download, socket timed out after ${SocketTimeout} ms`
+      )
+    })
 
-    const lengthHeader = res.message.headers['content-length']
-    if (lengthHeader === undefined || lengthHeader === null) {
-      throw new Error('Content-Length not found on blob response')
+    const contentRangeHeader = metadataResponse.message.headers['content-range']
+    if (!contentRangeHeader) {
+      throw new Error(
+        'Content-Range is not defined; unable to determine file size'
+      )
     }
-
-    const length = parseInt(lengthHeader)
-    if (Number.isNaN(length)) {
-      throw new Error(`Could not interpret Content-Length: ${length}`)
+    // Parse the total file size from the Content-Range header
+    const length = parseInt(contentRangeHeader.split('/')[1])
+    if (isNaN(length)) {
+      throw new Error(
+        `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
+      )
     }
 
     const downloads: {

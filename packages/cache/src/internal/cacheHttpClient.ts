@@ -194,7 +194,12 @@ export async function downloadCache(
       await downloadCacheHttpClient(archiveLocation, archivePath)
     }
   } else {
-    await downloadCacheAxiosMultiPart(archiveLocation, archivePath)
+    await downloadCacheHttpClientConcurrent(
+      archiveLocation,
+      archivePath,
+      downloadOptions
+    )
+    // await downloadCacheAxiosMultiPart(archiveLocation, archivePath)
   }
 }
 
