@@ -4,6 +4,7 @@ import * as utils from './internal/cacheUtils'
 import * as cacheHttpClient from './internal/cacheHttpClient'
 import {createTar, extractTar, listTar} from './internal/tar'
 import {DownloadOptions, UploadOptions} from './options'
+import {createHttpClient, getCacheApiUrl} from './internal/cacheHttpClient'
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -51,6 +52,34 @@ function checkKey(key: string): void {
 
 export function isFeatureAvailable(): boolean {
   return !!process.env['ACTIONS_CACHE_URL']
+}
+
+const promiseWithTimeout = async <T>(
+  timeoutMs: number,
+  promise: Promise<T>
+): Promise<T | string> => {
+  let timeoutHandle: NodeJS.Timeout
+  const timeoutPromise = new Promise<string>(resolve => {
+    timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs)
+  })
+
+  return Promise.race([promise, timeoutPromise]).then(result => {
+    clearTimeout(timeoutHandle)
+    return result
+  })
+}
+
+async function reportFailure(): Promise<void> {
+  try {
+    core.info('Reporting failure to api.blacksmith.sh')
+    const httpClient = createHttpClient()
+    await promiseWithTimeout(
+      10000,
+      httpClient.postJson(getCacheApiUrl('report-failed'), {})
+    )
+  } catch (error) {
+    core.warning('Failed to report failure to api.blacksmith.sh')
+  }
 }
 
 /**
@@ -145,6 +174,7 @@ export async function restoreCache(
         core.info(`Did not get a cache hit; proceeding as an uncached run`)
       } else {
         core.warning(`Failed to restore: ${(error as Error).message}`)
+        await reportFailure()
       }
     }
   } finally {

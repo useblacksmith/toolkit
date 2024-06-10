@@ -1,6 +1,6 @@
 {
   "name": "@useblacksmith/cache",
-  "version": "3.2.88",
+  "version": "3.2.109",
   "preview": true,
   "description": "Blacksmith Actions cache lib",
   "keywords": [
@@ -45,6 +45,7 @@
     "@azure/abort-controller": "^1.1.0",
     "@azure/ms-rest-js": "^2.6.0",
     "@azure/storage-blob": "^12.13.0",
+    "@sentry/node": "^8.0.0",
     "axios": "^1.6.8",
     "axios-retry": "^4.1.0",
     "semver": "^6.1.0",

@@ -15,6 +15,9 @@ import {AbortController} from '@azure/abort-controller'
 import axiosRetry from 'axios-retry'
 import axios, {AxiosResponse} from 'axios'
 import {FileHandle} from 'fs/promises'
+import {report} from 'process'
+import {createHttpClient, getCacheApiUrl} from './cacheHttpClient'
+import {startIdleSpan} from '@sentry/core'
 
 /**
  * Pipes the body of a HTTP response to a stream
@@ -57,6 +60,19 @@ async function pipeAxiosResponseToStream(
   await response.data.pipe(reportProgress).pipe(output)
 }
 
+async function reportStall(): Promise<void> {
+  try {
+    core.debug('Reporting stall to api.blacksmith.sh')
+    const httpClient = createHttpClient()
+    await promiseWithTimeout(
+      10000,
+      httpClient.postJson(getCacheApiUrl('report-stall'), {})
+    )
+  } catch (error) {
+    core.warning('Failed to report failure to api.blacksmith.sh')
+  }
+}
+
 /**
  * Class for tracking the download state and displaying stats.
  */
@@ -68,6 +84,7 @@ export class DownloadProgress {
   receivedBytes: number
   startTime: number
   displayedComplete: boolean
+  highWaterTime: number
   timeoutHandle?: ReturnType<typeof setTimeout>
 
   constructor(contentLength: number) {
@@ -77,6 +94,7 @@ export class DownloadProgress {
     this.segmentOffset = 0
     this.receivedBytes = 0
     this.displayedComplete = false
+    this.highWaterTime = 0
     this.startTime = Date.now()
   }
 
@@ -154,6 +172,7 @@ export class DownloadProgress {
    */
   onProgress(): (progress: TransferProgressEvent) => void {
     return (progress: TransferProgressEvent) => {
+      this.highWaterTime = Date.now()
       this.setReceivedBytes(progress.loadedBytes)
     }
   }
@@ -424,6 +443,7 @@ export async function downloadCacheHttpClientConcurrent(
   archivePath: fs.PathLike,
   options: DownloadOptions
 ): Promise<void> {
+  core.info('Downloading from cache using Blacksmith Actions http-client')
   const archiveDescriptor = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
   await archiveDescriptor.chmod(0o644)
@@ -432,6 +452,11 @@ export async function downloadCacheHttpClientConcurrent(
     socketTimeout: options.timeoutInMs,
     keepAlive: true
   })
+  let progress
+  const stallTimeout = setTimeout(() => {
+    reportStall()
+  }, 600000)
+  stallTimeout.unref() // Don't keep the process alive if the download is stalled.
   try {
     const metadataResponse = await retryHttpClientResponse(
       'downloadCache',
@@ -461,7 +486,8 @@ export async function downloadCacheHttpClientConcurrent(
         `Content-Range is not a number; unable to determine file size: ${contentRangeHeader}`
       )
     }
-
+    progress = new DownloadProgress(length)
+    progress.startDisplayTimer()
     const downloads: {
       offset: number
       promiseGetter: () => Promise<DownloadSegment>
@@ -487,8 +513,6 @@ export async function downloadCacheHttpClientConcurrent(
     downloads.reverse()
     let actives = 0
     let bytesDownloaded = 0
-    const progress = new DownloadProgress(length)
-    progress.startDisplayTimer()
     const progressFn = progress.onProgress()
 
     const activeDownloads: {[offset: number]: Promise<DownloadSegment>} = []
@@ -498,12 +522,20 @@ export async function downloadCacheHttpClientConcurrent(
 
     const waitAndWrite: () => Promise<void> = async () => {
       const segment = await Promise.race(Object.values(activeDownloads))
-      await archiveDescriptor.write(
-        segment.buffer,
-        0,
-        segment.count,
-        segment.offset
+      const result = await promiseWithTimeout(
+        10000,
+        archiveDescriptor.write(
+          segment.buffer,
+          0,
+          segment.count,
+          segment.offset
+        )
       )
+      if (result === 'timeout') {
+        throw new Error(
+          'Unable to download from cache using Blacksmith Actions http-client'
+        )
+      }
       actives--
       delete activeDownloads[segment.offset]
       bytesDownloaded += segment.count
@@ -523,6 +555,11 @@ export async function downloadCacheHttpClientConcurrent(
       await waitAndWrite()
     }
   } finally {
+    // Stop the progress logger regardless of whether the download succeeded or failed.
+    if (progress) {
+      progress.stopDisplayTimer()
+    }
+    clearTimeout(stallTimeout)
     httpClient.dispose()
     await archiveDescriptor.close()
   }

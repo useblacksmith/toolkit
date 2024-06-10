@@ -32,10 +32,11 @@ import {
   retryHttpClientResponse,
   retryTypedResponse
 } from './requestUtils'
+import * as Sentry from '@sentry/node'
 
 const versionSalt = '1.0'
 
-function getCacheApiUrl(resource: string): string {
+export function getCacheApiUrl(resource: string): string {
   const baseUrl: string =
     process.env['BLACKSMITH_CACHE_URL'] || 'https://api.blacksmith.sh/cache'
   if (!baseUrl) {
@@ -63,7 +64,7 @@ function getRequestOptions(): RequestOptions {
   return requestOptions
 }
 
-function createHttpClient(): HttpClient {
+export function createHttpClient(): HttpClient {
   const token = process.env['BLACKSMITH_CACHE_TOKEN']
   const bearerCredentialHandler = new BearerCredentialHandler(token ?? '')
 

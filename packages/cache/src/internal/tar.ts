@@ -11,7 +11,7 @@ import {
   TarFilename,
   ManifestFilename
 } from './constants'
-import { coerce } from 'semver'
+import {coerce} from 'semver'
 
 const IS_WINDOWS = process.platform === 'win32'
 
@@ -90,6 +90,7 @@ async function getTarArgs(
       break
     case 'extract':
       args.push(
+        '--overwrite',
         '-xf',
         BSD_TAR_ZSTD
           ? tarFile
