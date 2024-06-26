@@ -90,7 +90,7 @@ async function getTarArgs(
       break
     case 'extract':
       args.push(
-        '--overwrite',
+        '--skip-old-files',
         '-xf',
         BSD_TAR_ZSTD
           ? tarFile

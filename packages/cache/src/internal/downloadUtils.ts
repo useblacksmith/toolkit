@@ -455,7 +455,7 @@ export async function downloadCacheHttpClientConcurrent(
   let progress
   const stallTimeout = setTimeout(() => {
     reportStall()
-  }, 600000)
+  }, 300000)
   stallTimeout.unref() // Don't keep the process alive if the download is stalled.
   try {
     const metadataResponse = await retryHttpClientResponse(
@@ -492,7 +492,7 @@ export async function downloadCacheHttpClientConcurrent(
       offset: number
       promiseGetter: () => Promise<DownloadSegment>
     }[] = []
-    const blockSize = 4 * 1024 * 1024
+    const blockSize = 2 * 1024 * 1024
 
     for (let offset = 0; offset < length; offset += blockSize) {
       const count = Math.min(blockSize, length - offset)
@@ -546,7 +546,7 @@ export async function downloadCacheHttpClientConcurrent(
       activeDownloads[nextDownload.offset] = nextDownload.promiseGetter()
       actives++
 
-      if (actives >= (options.downloadConcurrency ?? 10)) {
+      if (actives >= (options.downloadConcurrency ?? 12)) {
         await waitAndWrite()
       }
     }
@@ -576,7 +576,7 @@ async function downloadSegmentRetry(
 
   while (true) {
     try {
-      const timeout = 30000
+      const timeout = 15000
       const result = await promiseWithTimeout(
         timeout,
         downloadSegment(httpClient, archiveLocation, offset, count)
@@ -592,6 +592,11 @@ async function downloadSegmentRetry(
       }
 
       failures++
+      // Jitter a bit before retrying
+      await new Promise(resolve => setTimeout(resolve, Math.random() * 300))
+      core.info(
+        `Retrying download segment ${offset} of ${count} (${failures} of ${retries})`
+      )
     }
   }
 }
