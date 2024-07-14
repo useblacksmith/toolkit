@@ -21,7 +21,7 @@ jobs:
         run: |
           # Define the repositories and tags to check
           repos=("rust-cache")  # Replace with your repository names
-          tags=("v3")  # Replace with your tag names
+          tags=("v1")  # Replace with your tag names
 
           for repo in "${repos[@]}"; do
             echo "Checking repository: $repo"
@@ -40,5 +40,14 @@ jobs:
                 echo "Tag $tag in repository $repo points to the main branch SHA"
                 echo "SHA: $tag_sha"
               fi
+      - name: Notify Slack on Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+         channel-id: 'C06JTU4DWJ3'
+         slack-message: "One of the tags does not match the main branch, please confirm! :x:"
+        env:
+         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
             done
           done
