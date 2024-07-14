@@ -30,7 +30,7 @@ jobs:
             ["setup-gradle"]="v5 v6"
             ["setup-zig"]="v2"
             ["setup-ocaml"]="v1 v1.0.1"
-            ["setup-rust"]="v1"
+            ["setup-rust"]="v3"
           )
 
           for repo in "${!repo_tags[@]}"; do
