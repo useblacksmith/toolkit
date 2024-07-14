@@ -53,6 +53,3 @@ jobs:
          slack-message: "One of the tags does not match the main branch, please confirm! :x:"
         env:
          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-            done
-          done
