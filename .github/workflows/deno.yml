@@ -30,9 +30,15 @@ jobs:
 
             for tag in "${tags[@]}"; do
               tag_sha=$(gh api repos/useblacksmith/$repo/git/ref/tags/$tag | jq -r '.object.sha' || echo "Tag $tag not found in repository $repo")
-              if [ "$tag_sha" != "$main_sha" ]; then
+              if [ "$tag_sha" = "Tag not found" ]; then
+                echo "Tag $tag not found in repository $repo"
+              elif [ "$tag_sha" != "$main_sha" ]; then
                 echo "Tag $tag in repository $repo does not point to the main branch SHA"
-                exit 1
+                echo "Tag SHA: $tag_sha"
+                echo "Main SHA: $main_sha"
+              else
+                echo "Tag $tag in repository $repo points to the main branch SHA"
+                echo "SHA: $tag_sha"
               fi
             done
           done
