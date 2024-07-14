@@ -27,7 +27,7 @@ jobs:
             ["setup-python"]="v6"
             ["setup-ruby"]="v2"
             ["setup-java"]="v5"
-            ["setup-gradle"]="v3"
+            ["setup-gradle"]="v5"
             ["setup-zig"]="v2"
             ["setup-ocaml"]="v1"
             ["setup-rust"]="v3"
