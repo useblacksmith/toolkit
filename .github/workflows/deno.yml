@@ -61,7 +61,7 @@ jobs:
         if: failure()
         uses: slackapi/slack-github-action@v1.25.0
         with:
-         channel-id: 'C06JTU4DWJ3'
+         channel-id: 'C06GVG6TF96'
          slack-message: "One of the cache tags does not match the main branch, please check the actions failure for more info :x:"
         env:
          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
