@@ -19,25 +19,37 @@ jobs:
 
       - name: Check tags for each repository
         run: |
-          # Define the repositories and tags to check
-          repos=("rust-cache")  # Replace with your repository names
-          tags=("v1")  # Replace with your tag names
+          declare -A repo_tags
+          repo_tags=(
+            ["rust-cache"]="v3"
+            ["setup-go"]="v6"
+            ["setup-node"]="v5"
+            ["setup-python"]="v6"
+            ["setup-ruby"]="v2"
+            ["setup-java"]="v5"
+            ["setup-gradle"]="v3"
+            ["setup-zig"]="v2"
+            ["setup-ocaml"]="v1"
+            ["setup-rust"]="v3"
+          )
 
-          for repo in "${repos[@]}"; do
+          for repo in "${!repo_tags[@]}"; do
             echo "Checking repository: $repo"
-            main_branch=$(gh api repos/useblacksmith/$repo | jq -r '.default_branch')
-            main_sha=$(gh api repos/useblacksmith/$repo/git/ref/heads/$main_branch | jq -r '.object.sha')
+            main_branch=$(gh api repos/${{ github.repository_owner }}/$repo | jq -r '.default_branch')
+            main_sha=$(gh api repos/${{ github.repository_owner }}/$repo/git/ref/heads/$main_branch | jq -r '.object.sha')
 
-            for tag in "${tags[@]}"; do
-              tag_sha=$(gh api repos/useblacksmith/$repo/git/ref/tags/$tag | jq -r '.object.sha' || echo "Tag $tag not found in repository $repo")
+            tags=${repo_tags[$repo]}
+            for tag in $tags; do
+              echo "Checking tag: $tag"
+              tag_sha=$(gh api repos/${{ github.repository_owner }}/$repo/git/ref/tags/$tag | jq -r '.object.sha' 2>/dev/null || echo "Tag not found")
               if [ "$tag_sha" = "Tag not found" ]; then
                 echo "Tag $tag not found in repository $repo"
-                exit 1;
+                exit 1
               elif [ "$tag_sha" != "$main_sha" ]; then
                 echo "Tag $tag in repository $repo does not point to the main branch SHA"
                 echo "Tag SHA: $tag_sha"
                 echo "Main SHA: $main_sha"
-                exit 1;
+                exit 1
               else
                 echo "Tag $tag in repository $repo points to the main branch SHA"
                 echo "SHA: $tag_sha"
@@ -50,6 +62,6 @@ jobs:
         uses: slackapi/slack-github-action@v1.25.0
         with:
          channel-id: 'C06JTU4DWJ3'
-         slack-message: "One of the tags does not match the main branch, please confirm! :x:"
+         slack-message: "One of the cache tags does not match the main branch, please check the actions failure for more info :x:"
         env:
          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
