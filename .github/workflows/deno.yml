@@ -1,0 +1,67 @@
+name: Check Tags
+env:
+    GH_TOKEN: ${{ github.token }}
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # Runs every day at midnight UTC
+
+jobs:
+  check-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install GitHub CLI
+        run: sudo apt-get install gh
+
+      - name: Check tags for each repository
+        run: |
+          declare -A repo_tags
+          repo_tags=(
+            ["rust-cache"]="v3"
+            ["setup-go"]="v6"
+            ["setup-node"]="v5"
+            ["setup-python"]="v6"
+            ["setup-ruby"]="v2"
+            ["setup-java"]="v5"
+            ["setup-gradle"]="v5 v6"
+            ["setup-zig"]="v2"
+            ["setup-ocaml"]="v1 v1.0.1"
+            ["setup-rust"]="v3"
+          )
+
+          for repo in "${!repo_tags[@]}"; do
+            echo "Checking repository: $repo"
+            main_branch=$(gh api repos/${{ github.repository_owner }}/$repo | jq -r '.default_branch')
+            main_sha=$(gh api repos/${{ github.repository_owner }}/$repo/git/ref/heads/$main_branch | jq -r '.object.sha')
+
+            tags=${repo_tags[$repo]}
+            for tag in $tags; do
+              echo "Checking tag: $tag"
+              tag_sha=$(gh api repos/${{ github.repository_owner }}/$repo/git/ref/tags/$tag | jq -r '.object.sha' 2>/dev/null || echo "Tag not found")
+              if [ "$tag_sha" = "Tag not found" ]; then
+                echo "Tag $tag not found in repository $repo"
+                exit 1
+              elif [ "$tag_sha" != "$main_sha" ]; then
+                echo "Tag $tag in repository $repo does not point to the main branch SHA"
+                echo "Tag SHA: $tag_sha"
+                echo "Main SHA: $main_sha"
+                exit 1
+              else
+                echo "Tag $tag in repository $repo points to the main branch SHA"
+                echo "SHA: $tag_sha"
+              fi
+            done
+          done
+
+      - name: Notify Slack on Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+         channel-id: 'C06JTU4DWJ3'
+         slack-message: "One of the cache tags does not match the main branch, please check the actions failure for more info :x:"
+        env:
+         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
