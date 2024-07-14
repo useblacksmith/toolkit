@@ -40,6 +40,9 @@ jobs:
                 echo "Tag $tag in repository $repo points to the main branch SHA"
                 echo "SHA: $tag_sha"
               fi
+            done
+          done
+
       - name: Notify Slack on Failure
         if: failure()
         uses: slackapi/slack-github-action@v1.25.0
