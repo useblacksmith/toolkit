@@ -1,0 +1,37 @@
+name: Check Tags
+
+on:
+  push:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # Runs every day at midnight UTC
+
+jobs:
+  check-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install GitHub CLI
+        run: sudo apt-get install gh
+
+      - name: Check tags for each repository
+        run: |
+          # Define the repositories and tags to check
+          repos=("rust-cache")  # Replace with your repository names
+          tags=("v3")  # Replace with your tag names
+
+          for repo in "${repos[@]}"; do
+            echo "Checking repository: $repo"
+            main_branch=$(gh api repos/useblacksmith/$repo | jq -r '.default_branch')
+            main_sha=$(gh api repos/useblacksmith/$repo/git/ref/heads/$main_branch | jq -r '.object.sha')
+
+            for tag in "${tags[@]}"; do
+              tag_sha=$(gh api repos/useblacksmith/$repo/git/ref/tags/$tag | jq -r '.object.sha' || echo "Tag $tag not found in repository $repo")
+              if [ "$tag_sha" != "$main_sha" ]; then
+                echo "Tag $tag in repository $repo does not point to the main branch SHA"
+                exit 1
+              fi
+            done
+          done
