@@ -62,6 +62,9 @@ async function getTarArgs(
   const cacheFileName = utils.getCacheFileName(compressionMethod)
   const tarFile = 'cache.tar'
   const workingDirectory = getWorkingDirectory()
+  const shouldSkipOldFiles =
+    process.env['GITHUB_REPOSITORY']?.includes('muzzapp') ||
+    process.env['GITHUB_REPOSITORY']?.includes('FastActions')
   // Speficic args for BSD tar on windows for workaround
   const BSD_TAR_ZSTD =
     tarPath.type === ArchiveToolType.BSD &&
@@ -98,6 +101,9 @@ async function getTarArgs(
         '-C',
         workingDirectory.replace(new RegExp(`\\${path.sep}`, 'g'), '/')
       )
+      if (shouldSkipOldFiles) {
+        args.push('--skip-old-files')
+      }
       break
     case 'list':
       args.push(

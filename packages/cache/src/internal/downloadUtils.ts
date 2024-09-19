@@ -234,14 +234,32 @@ export async function downloadCacheAxiosMultiPart(
 
   try {
     core.debug(`Downloading from ${archiveLocation} to ${archivePath}`)
-    const metadataResponse: AxiosResponse = await axios.get(archiveLocation, {
-      headers: {Range: 'bytes=0-1'}
-    })
+    let metadataResponse: AxiosResponse
+    let contentRangeHeader: string | undefined
+    let retries = 0
+    const maxRetries = 2
 
-    const contentRangeHeader = metadataResponse.headers['content-range']
+    while (retries <= maxRetries) {
+      metadataResponse = await axios.get(archiveLocation, {
+        headers: {Range: 'bytes=0-1'}
+      })
+
+      contentRangeHeader = metadataResponse.headers['content-range']
+      if (contentRangeHeader) {
+        break
+      }
+
+      retries++
+      if (retries <= maxRetries) {
+        core.debug(
+          `Content-Range header not found. Retrying (${retries}/${maxRetries})...`
+        )
+      }
+    }
+
     if (!contentRangeHeader) {
       throw new Error(
-        'Content-Range is not defined; unable to determine file size'
+        'Content-Range is not defined after retries; unable to determine file size'
       )
     }
 
@@ -443,7 +461,6 @@ export async function downloadCacheHttpClientConcurrent(
   archivePath: fs.PathLike,
   options: DownloadOptions
 ): Promise<void> {
-  core.info('Downloading from cache using Blacksmith Actions http-client')
   const archiveDescriptor = await fs.promises.open(archivePath, 'w+')
   // Set file permissions so that other users can untar the cache
   await archiveDescriptor.chmod(0o644)
@@ -458,25 +475,45 @@ export async function downloadCacheHttpClientConcurrent(
   }, 300000)
   stallTimeout.unref() // Don't keep the process alive if the download is stalled.
   try {
-    const metadataResponse = await retryHttpClientResponse(
-      'downloadCache',
-      async () =>
-        httpClient.get(archiveLocation, {
-          Range: 'bytes=0-1'
-        })
-    )
-    // Abort download if no traffic received over the socket.
-    metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
-      metadataResponse.message.destroy()
-      core.debug(
-        `Aborting download, socket timed out after ${SocketTimeout} ms`
-      )
-    })
+    let metadataResponse
+    let contentRangeHeader
+    let retries = 0
+    const maxRetries = 2
 
-    const contentRangeHeader = metadataResponse.message.headers['content-range']
+    while (retries <= maxRetries) {
+      metadataResponse = await retryHttpClientResponse(
+        'downloadCache',
+        async () =>
+          httpClient.get(archiveLocation, {
+            Range: 'bytes=0-1'
+          })
+      )
+      // Abort download if no traffic received over the socket.
+      metadataResponse.message.socket.setTimeout(SocketTimeout, () => {
+        metadataResponse.message.destroy()
+        core.debug(
+          `Aborting download, socket timed out after ${SocketTimeout} ms`
+        )
+      })
+
+      contentRangeHeader = metadataResponse.message.headers['content-range']
+      if (contentRangeHeader) {
+        break
+      }
+
+      retries++
+      if (retries <= maxRetries) {
+        core.debug(
+          `Content-Range header not found. Retrying (${retries}/${maxRetries})...`
+        )
+      }
+    }
+
     if (!contentRangeHeader) {
+      const headers = JSON.stringify(metadataResponse.message.headers)
+      const statusCode = metadataResponse.message.statusCode
       throw new Error(
-        'Content-Range is not defined; unable to determine file size'
+        `Content-Range is not defined; unable to determine file size; Headers: ${headers}; Status Code: ${statusCode}`
       )
     }
     // Parse the total file size from the Content-Range header

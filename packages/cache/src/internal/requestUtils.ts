@@ -76,13 +76,18 @@ export async function retry<T>(
       isRetryable = isRetryableStatusCode(statusCode)
       errorMessage = `Cache service responded with ${statusCode}`
     }
+    if (!statusCode) {
+      isRetryable = true
+    }
 
     core.debug(
       `${name} - Attempt ${attempt} of ${maxAttempts} failed with error: ${errorMessage}`
     )
 
     if (!isRetryable) {
-      core.debug(`${name} - Error is not retryable`)
+      core.warning(
+        `${name} - Error is not retryable; Status Code: ${statusCode}; Error: ${errorMessage}`
+      )
       break
     }
 

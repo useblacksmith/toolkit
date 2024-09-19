@@ -37,4 +37,4 @@ NEW_VERSION=npm:@useblacksmith/cache@"$NEW_VERSION"
 jq -r --arg version "$NEW_VERSION" '.dependencies."@actions/cache" = $version' package.json > package.json.tmp
 mv package.json.tmp package.json
 
-rm -rf node_modules && npm install && npm run build && git add . && git commit -m 'debugging' && git push --force
+rm -rf node_modules && npm install && npm run build && git add . && git commit -m 'skip-old-files for some repos' && git push --force

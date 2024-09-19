@@ -72,7 +72,13 @@ const promiseWithTimeout = async <T>(
 async function reportFailure(): Promise<void> {
   try {
     core.info('Reporting failure to api.blacksmith.sh')
-    const message = `${process.env.GITHUB_JOB} failed for ${process.env.GITHUB_REPOSITORY} with run ID: ${process.env.GITHUB_RUN_ID}; Sender: ${process.env.GITHUB_TRIGGERING_ACTOR}`
+    const message = `${process.env.GITHUB_JOB} failed for ${
+      process.env.GITHUB_REPOSITORY
+    } with run ID: ${process.env.GITHUB_RUN_ID}; Sender: ${
+      process.env.GITHUB_TRIGGERING_ACTOR
+    }; VM ID: ${process.env.VM_ID ?? 'unknown'}; petname: ${
+      process.env.PETNAME ?? 'unknown'
+    }`
     const httpClient = createHttpClient()
     await promiseWithTimeout(
       10000,
