@@ -32,20 +32,18 @@ import {
   retryHttpClientResponse,
   retryTypedResponse
 } from './requestUtils'
-import * as Sentry from '@sentry/node'
 import axios from 'axios'
 
 const versionSalt = '1.0'
 
 export function getCacheApiUrl(resource: string): string {
-  const baseUrl: string =
-    process.env['BLACKSMITH_CACHE_URL'] || 'https://api.blacksmith.sh/cache'
-  if (!baseUrl) {
-    throw new Error('Cache Service Url not found, unable to restore cache.')
+  let baseUrl = 'https://api.blacksmith.sh/cache'
+  if (process.env.PETNAME && process.env.PETNAME.includes('staging')) {
+    baseUrl = 'https://stagingapi.blacksmith.sh/cache'
+    core.info('Using staging API')
   }
 
   const url = `${baseUrl}/${resource}`
-  core.debug(`Blacksmith cache resource URL: ${url}; version: 3.2.40`)
   return url
 }
 
