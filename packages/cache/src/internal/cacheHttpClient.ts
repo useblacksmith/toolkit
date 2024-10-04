@@ -37,13 +37,20 @@ import axios from 'axios'
 const versionSalt = '1.0'
 
 export function getCacheApiUrl(resource: string): string {
-  let baseUrl = 'https://api.blacksmith.sh/cache'
-  if (process.env.PETNAME && process.env.PETNAME.includes('staging')) {
-    baseUrl = 'https://stagingapi.blacksmith.sh/cache'
-    core.info('Using staging API')
+  let baseUrl = process.env.BLACKSMITH_CACHE_URL
+
+  if (!baseUrl) {
+    baseUrl = process.env.PETNAME?.includes('staging')
+      ? 'https://stagingapi.blacksmith.sh/cache'
+      : 'https://api.blacksmith.sh/cache'
   }
 
   const url = `${baseUrl}/${resource}`
+
+  if (process.env.PETNAME?.includes('staging')) {
+    core.info(`Using staging API: ${url}`)
+  }
+
   return url
 }
 
@@ -114,7 +121,7 @@ export async function getCacheEntry(
 
   const maxRetries = 2
   let retries = 0
-  core.info(`Checking cache for keys ${keys.join(',')}`)
+  core.info(`Checking cache for keys ${keys.join(',')} and version ${version}`)
 
   while (retries <= maxRetries) {
     try {
