@@ -21,7 +21,6 @@ import {
   ArtifactCacheList
 } from './contracts'
 import {
-  downloadCacheAxiosMultiPart,
   downloadCacheHttpClient,
   downloadCacheHttpClientConcurrent,
   downloadCacheStorageSDK
@@ -38,6 +37,8 @@ const versionSalt = '1.0'
 
 export function getCacheApiUrl(resource: string): string {
   let baseUrl = process.env.BLACKSMITH_CACHE_URL
+
+  core.info(`cache backend url: ${baseUrl}`)
 
   if (!baseUrl) {
     baseUrl = process.env.PETNAME?.includes('staging')
@@ -121,7 +122,13 @@ export async function getCacheEntry(
 
   const maxRetries = 3
   let retries = 0
-  core.info(`Checking cache for keys ${keys.join(',')} and version ${version}`)
+  const cacheToken = process.env['BLACKSMITH_CACHE_TOKEN']
+  const repoName = process.env['GITHUB_REPO_NAME']
+  core.info(
+    `Checking cache for keys ${keys.join(
+      ','
+    )} and version ${version} using single-use cache token for repo ${repoName}: ${cacheToken}`
+  )
 
   while (retries <= maxRetries) {
     try {
@@ -129,8 +136,9 @@ export async function getCacheEntry(
       const response = await axios.get(getCacheApiUrl(resource), {
         headers: {
           Accept: createAcceptHeader('application/json', '6.0-preview.1'),
-          'X-Github-Repo-Name': process.env['GITHUB_REPO_NAME'],
-          Authorization: `Bearer ${process.env['BLACKSMITH_CACHE_TOKEN']}`
+          'X-Github-Repo-Name': repoName,
+          Authorization: `Bearer ${cacheToken}`,
+          'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central'
         },
         timeout: 3000 // 3 seconds timeout
       })
@@ -278,7 +286,10 @@ export async function reserveCache(
   const response = await retryTypedResponse('reserveCache', async () =>
     httpClient.postJson<ReserveCacheResponse>(
       getCacheApiUrl('caches'),
-      reserveCacheRequest
+      reserveCacheRequest,
+      {
+        'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central'
+      }
     )
   )
   return response

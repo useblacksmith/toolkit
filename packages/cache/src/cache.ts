@@ -5,6 +5,9 @@ import * as cacheHttpClient from './internal/cacheHttpClient'
 import {createTar, extractTar, listTar} from './internal/tar'
 import {DownloadOptions, UploadOptions} from './options'
 import {createHttpClient, getCacheApiUrl} from './internal/cacheHttpClient'
+import {execSync} from 'child_process'
+import {ArtifactCacheEntry} from './internal/contracts'
+import * as fs from 'fs'
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -126,10 +129,18 @@ export async function restoreCache(
   }
 
   const compressionMethod = await utils.getCompressionMethod()
-  let archivePath = ''
+
+  // TODO(aayush): Clean this up.
+  const archivePath = path.join(
+    await utils.createTempDirectory(),
+    utils.getCacheFileName(compressionMethod)
+  )
+  core.debug(`Archive Path: ${archivePath}`)
+  let cacheEntry: ArtifactCacheEntry | null = null
+  let cacheKey: string | undefined = undefined
   try {
     // path are needed to compute version
-    const cacheEntry = await cacheHttpClient.getCacheEntry(keys, paths, {
+    cacheEntry = await cacheHttpClient.getCacheEntry(keys, paths, {
       compressionMethod,
       enableCrossOsArchive
     })
@@ -137,17 +148,12 @@ export async function restoreCache(
       // Cache not found
       return undefined
     }
+    cacheKey = cacheEntry.cacheKey
 
     if (options?.lookupOnly) {
       core.info('Lookup only - skipping download')
       return cacheEntry.cacheKey
     }
-
-    archivePath = path.join(
-      await utils.createTempDirectory(),
-      utils.getCacheFileName(compressionMethod)
-    )
-    core.debug(`Archive Path: ${archivePath}`)
 
     // Download the cache from the cache entry
     await cacheHttpClient.downloadCache(
@@ -167,23 +173,35 @@ export async function restoreCache(
       )} MB (${archiveFileSize} B)`
     )
 
+    const extractStartTime = Date.now()
     await extractTar(archivePath, compressionMethod)
+    const extractEndTime = Date.now()
+    const extractionTimeSeconds = (extractEndTime - extractStartTime) / 1000
+    core.info(
+      `Cache extraction completed in ${extractionTimeSeconds.toFixed(
+        2
+      )} seconds`
+    )
     core.info('Cache restored successfully')
 
-    return cacheEntry.cacheKey
+    return cacheKey
   } catch (error) {
     const typedError = error as Error
     if (typedError.name === ValidationError.name) {
       throw error
     } else {
-      // Supress all non-validation cache related errors because caching should be optional
-      if (
-        (error as Error).message.includes(`Cache service responded with 404`)
-      ) {
+      // Suppress all non-validation cache related errors because caching should be optional
+      if (typedError.message?.includes(`Cache service responded with 404`)) {
         core.info(`Did not get a cache hit; proceeding as an uncached run`)
       } else {
-        core.warning(`Failed to restore: ${(error as Error).message}`)
-        await reportFailure()
+        core.warning(`Failed to restore: ${typedError.message}`)
+        if (
+          !typedError.message?.includes('File exists') &&
+          !typedError.message?.includes('Operation not permitted') &&
+          !typedError.message?.includes('failed with exit code 2')
+        ) {
+          await reportFailure()
+        }
       }
     }
   } finally {

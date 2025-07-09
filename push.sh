@@ -22,7 +22,7 @@ mv packages/cache/package.json.tmp packages/cache/package.json
 rm -rf node_modules && npm install && npm run build && cd packages/cache && npm publish
 
 # sleep for 5 seconds to allow the publish to complete
-sleep 2
+sleep 5
 
 cd "$HOME/dev/bscache"
 
@@ -34,7 +34,16 @@ echo "Current version: $CURRENT_VERSION"
 # Update this to npm:@useblacksmith/cache@"$NEW_VERSION" in the package.json file
 NEW_VERSION=npm:@useblacksmith/cache@"$NEW_VERSION"
 
+sleep 5
+
 jq -r --arg version "$NEW_VERSION" '.dependencies."@actions/cache" = $version' package.json > package.json.tmp
 mv package.json.tmp package.json
 
-rm -rf node_modules && npm install && npm run build && git add . && git commit -m 'revert back to api.blacksmith.sh' && git push --force
+for i in {1..3}; do
+  if rm -rf node_modules && npm install && npm run build && git add . && git commit -m 'revert back to api.blacksmith.sh' && git push --force; then
+    break
+  else
+    echo "Attempt $i failed. Retrying in 1 second..."
+    sleep 1
+  fi
+done
