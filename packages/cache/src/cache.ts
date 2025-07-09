@@ -140,7 +140,7 @@ export async function restoreCache(
   let cacheKey: string | undefined = undefined
   try {
     // path are needed to compute version
-    cacheEntry = await cacheHttpClient.getCacheEntry(keys, paths, {
+    cacheEntry = await cacheHttpClient.getCacheEntryAxios(keys, paths, {
       compressionMethod,
       enableCrossOsArchive
     })

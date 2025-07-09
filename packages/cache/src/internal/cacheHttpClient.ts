@@ -32,6 +32,7 @@ import {
   retryTypedResponse
 } from './requestUtils'
 import fetch from 'node-fetch'
+import axios from 'axios'
 
 const versionSalt = '1.0'
 
@@ -181,6 +182,108 @@ export async function getCacheEntry(
       return cacheResult
     } catch (error) {
       const isTimeout = error.name === 'AbortError'
+      const status = error.response?.status
+      
+      if ((status && status >= 500) || isTimeout) {
+        retries++
+        if (retries <= maxRetries) {
+          if (isTimeout) {
+            core.warning(
+              `Request timed out. Retrying (attempt ${retries} of ${maxRetries})`
+            )
+          } else {
+            core.warning(
+              `Retrying due to error: ${error.message} (attempt ${retries} of ${maxRetries})`
+            )
+          }
+          continue
+        }
+      }
+      
+      if (status) {
+        throw new Error(`Cache service responded with ${status}`)
+      } else if (isTimeout) {
+        throw new Error('Request timed out after 3 seconds')
+      } else {
+        throw error
+      }
+    }
+  }
+  throw new Error(`Failed to get cache entry after ${maxRetries} retries`)
+}
+
+export async function getCacheEntryAxios(
+  keys: string[],
+  paths: string[],
+  options?: InternalCacheOptions
+): Promise<ArtifactCacheEntry | null> {
+  const version = getCacheVersion(
+    paths,
+    options?.compressionMethod,
+    options?.enableCrossOsArchive
+  )
+  const resource = `?keys=${encodeURIComponent(
+    keys.join(',')
+  )}&version=${version}`
+
+  const maxRetries = 3
+  let retries = 0
+  const cacheToken = process.env['BLACKSMITH_CACHE_TOKEN']
+  const repoName = process.env['GITHUB_REPO_NAME']
+  core.info(
+    `Checking cache for keys ${keys.join(
+      ','
+    )} and version ${version} using single-use cache token for repo ${repoName}: ${cacheToken}`
+  )
+
+  while (retries <= maxRetries) {
+    try {
+      const before = Date.now()
+      
+      const response = await axios.get(getCacheApiUrl(resource), {
+        headers: {
+          Accept: createAcceptHeader('application/json', '6.0-preview.1'),
+          'X-Github-Repo-Name': repoName || '',
+          Authorization: `Bearer ${cacheToken}`,
+          'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central',
+          'User-Agent': 'axios/cache'
+        },
+        timeout: 3000,
+        validateStatus: () => true // Don't throw on non-2xx status codes
+      })
+
+      core.debug(`Cache lookup took ${Date.now() - before}ms`)
+
+      // Cache not found
+      if (response.status === 204) {
+        // List cache for primary key only if cache miss occurs
+        if (core.isDebug()) {
+          await printCachesListForDiagnostics(
+            keys[0],
+            createHttpClient(),
+            version
+          )
+        }
+        return null
+      }
+
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Cache service responded with ${response.status}`)
+      }
+
+      const cacheResult = response.data as ArtifactCacheEntry
+      const cacheDownloadUrl = cacheResult?.archiveLocation
+      if (!cacheDownloadUrl) {
+        // Cache archiveLocation not found. This should never happen, and hence bail out.
+        throw new Error('Cache not found.')
+      }
+      core.setSecret(cacheDownloadUrl)
+      core.debug(`Cache Result:`)
+      core.debug(JSON.stringify(cacheResult))
+
+      return cacheResult
+    } catch (error: any) {
+      const isTimeout = error.code === 'ECONNABORTED'
       const status = error.response?.status
       
       if ((status && status >= 500) || isTimeout) {

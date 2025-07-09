@@ -1,6 +1,6 @@
 {
   "name": "@useblacksmith/cache",
-  "version": "3.2.216",
+  "version": "3.2.217",
   "preview": true,
   "description": "Blacksmith Actions cache lib",
   "keywords": [
@@ -46,7 +46,7 @@
     "@azure/ms-rest-js": "^2.6.0",
     "@azure/storage-blob": "^12.13.0",
     "@sentry/node": "^8.0.0",
-    "axios": "^1.6.8",
+    "axios": "^1.10.0",
     "axios-retry": "^4.1.0",
     "node-fetch": "^3.3.2",
     "semver": "^6.1.0",
