@@ -228,8 +228,10 @@ export async function getCacheEntryAxios(
 
   const maxRetries = 3
   let retries = 0
-  const cacheToken = process.env['BLACKSMITH_CACHE_TOKEN']
-  const repoName = process.env['GITHUB_REPO_NAME']
+  const cacheToken = process.env.BLACKSMITH_CACHE_TOKEN
+  const repoName = process.env.GITHUB_REPO_NAME
+  const blacksmithVMID = process.env.BLACKSMITH_VM_ID
+  const rawVMID = process.env.VM_ID
   core.info(
     `Checking cache for keys ${keys.join(
       ','
@@ -245,8 +247,10 @@ export async function getCacheEntryAxios(
           Accept: createAcceptHeader('application/json', '6.0-preview.1'),
           'X-Github-Repo-Name': repoName || '',
           Authorization: `Bearer ${cacheToken}`,
-          'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central',
-          'User-Agent': 'axios/cache'
+          'X-Cache-Region': process.env.BLACKSMITH_REGION ?? 'eu-central',
+          'User-Agent': 'axios/cache',
+          'X-Blacksmith-VM-ID': blacksmithVMID || '',
+          'X-Blacksmith-Raw-VM-ID': rawVMID || ''
         },
         timeout: 3000,
         validateStatus: () => true // Don't throw on non-2xx status codes
