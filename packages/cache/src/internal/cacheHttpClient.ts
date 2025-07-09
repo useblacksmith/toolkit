@@ -31,7 +31,7 @@ import {
   retryHttpClientResponse,
   retryTypedResponse
 } from './requestUtils'
-import axios from 'axios'
+import fetch from 'node-fetch'
 
 const versionSalt = '1.0'
 
@@ -133,15 +133,22 @@ export async function getCacheEntry(
   while (retries <= maxRetries) {
     try {
       const before = Date.now()
-      const response = await axios.get(getCacheApiUrl(resource), {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000)
+
+      const response = await fetch(getCacheApiUrl(resource), {
+        method: 'GET',
         headers: {
           Accept: createAcceptHeader('application/json', '6.0-preview.1'),
-          'X-Github-Repo-Name': repoName,
+          'X-Github-Repo-Name': repoName || '',
           Authorization: `Bearer ${cacheToken}`,
-          'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central'
+          'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central',
+          'User-Agent': 'node-fetch/cache'
         },
-        timeout: 3000 // 3 seconds timeout
+        signal: controller.signal
       })
+
+      clearTimeout(timeoutId)
       core.debug(`Cache lookup took ${Date.now() - before}ms`)
 
       // Cache not found
@@ -161,7 +168,7 @@ export async function getCacheEntry(
         throw new Error(`Cache service responded with ${response.status}`)
       }
 
-      const cacheResult = response.data
+      const cacheResult = (await response.json()) as ArtifactCacheEntry
       const cacheDownloadUrl = cacheResult?.archiveLocation
       if (!cacheDownloadUrl) {
         // Cache archiveLocation not found. This should never happen, and hence bail out.
@@ -173,13 +180,13 @@ export async function getCacheEntry(
 
       return cacheResult
     } catch (error) {
-      if (
-        (error.response && error.response.status >= 500) ||
-        error.code === 'ECONNABORTED'
-      ) {
+      const isTimeout = error.name === 'AbortError'
+      const status = error.response?.status
+      
+      if ((status && status >= 500) || isTimeout) {
         retries++
         if (retries <= maxRetries) {
-          if (error.code === 'ECONNABORTED') {
+          if (isTimeout) {
             core.warning(
               `Request timed out. Retrying (attempt ${retries} of ${maxRetries})`
             )
@@ -191,9 +198,10 @@ export async function getCacheEntry(
           continue
         }
       }
-      if (error.response) {
-        throw new Error(`Cache service responded with ${error.response.status}`)
-      } else if (error.code === 'ECONNABORTED') {
+      
+      if (status) {
+        throw new Error(`Cache service responded with ${status}`)
+      } else if (isTimeout) {
         throw new Error('Request timed out after 3 seconds')
       } else {
         throw error
