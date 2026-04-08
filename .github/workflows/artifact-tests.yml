@@ -15,7 +15,7 @@ jobs:
 
     strategy:
       matrix:
-        runs-on: [ubuntu-latest, windows-latest, macos-latest]
+        runs-on: [ubuntu-latest, blacksmith-4vcpu-windows-2025, macos-latest]
       fail-fast: false
 
     runs-on: ${{ matrix.runs-on }}
@@ -73,7 +73,7 @@ jobs:
           }
   verify:
     name: Verify and Delete
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [upload]
     steps:
     - name: Checkout
