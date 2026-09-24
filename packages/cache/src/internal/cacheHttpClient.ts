@@ -64,6 +64,8 @@ function getRequestOptions(): RequestOptions {
   const requestOptions: RequestOptions = {
     headers: {
       Accept: createAcceptHeader('application/json', '6.0-preview.1'),
+      'X-Blacksmith-Instance-Slug':
+        process.env['BLACKSMITH_INSTANCE_SLUG'] || 'github',
       'X-Github-Repo-Name': process.env['GITHUB_REPO_NAME']
     }
   }
@@ -141,6 +143,8 @@ export async function getCacheEntry(
         headers: {
           Accept: createAcceptHeader('application/json', '6.0-preview.1'),
           'X-Github-Repo-Name': repoName || '',
+          'X-Blacksmith-Instance-Slug':
+            process.env['BLACKSMITH_INSTANCE_SLUG'] || 'github',
           Authorization: `Bearer ${cacheToken}`,
           'X-Cache-Region': process.env['BLACKSMITH_REGION'] ?? 'eu-central',
           'User-Agent': 'node-fetch/cache'
@@ -182,7 +186,7 @@ export async function getCacheEntry(
     } catch (error) {
       const isTimeout = error.name === 'AbortError'
       const status = error.response?.status
-      
+
       if ((status && status >= 500) || isTimeout) {
         retries++
         if (retries <= maxRetries) {
@@ -198,7 +202,7 @@ export async function getCacheEntry(
           continue
         }
       }
-      
+
       if (status) {
         throw new Error(`Cache service responded with ${status}`)
       } else if (isTimeout) {
